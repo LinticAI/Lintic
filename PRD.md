@@ -65,12 +65,12 @@ For UI stories, also include:
 **Description:** As a developer, I need a module that tracks token usage and interaction count per session and rejects requests that exceed configured limits.
 
 **Acceptance Criteria:**
-- [ ] ConstraintEnforcer class that accepts a Constraint config
-- [ ] Methods: canSend() returns boolean, recordUsage(tokens) updates state, getRemaining() returns budget info
-- [ ] Enforces max_session_tokens, max_message_tokens, max_interactions
-- [ ] Returns descriptive error when a constraint is violated
-- [ ] Unit tests for all constraint boundaries and edge cases
-- [ ] Typecheck passes
+- [x] ConstraintEnforcer class that accepts a Constraint config
+- [x] Methods: canSend() returns boolean, recordUsage(tokens) updates state, getRemaining() returns budget info
+- [x] Enforces max_session_tokens, max_message_tokens, max_interactions
+- [x] Returns descriptive error when a constraint is violated
+- [x] Unit tests for all constraint boundaries and edge cases
+- [x] Typecheck passes
 
 ### US-005: Database abstraction layer and SQLite adapter
 
