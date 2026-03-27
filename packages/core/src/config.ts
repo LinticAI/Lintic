@@ -12,10 +12,18 @@ export interface PromptConfig {
   tags?: string[];
 }
 
+export interface DatabaseConfig {
+  provider: 'sqlite' | 'postgres';
+  path?: string;
+  jwt_secret: string;
+  link_expiry_hours?: number;
+}
+
 export interface Config {
   agent: AgentConfig;
   constraints: Constraint;
   prompts: PromptConfig[];
+  database: DatabaseConfig;
 }
 
 // ─── Env Var Resolution ───────────────────────────────────────────────────────
@@ -48,6 +56,7 @@ export function resolveEnvVars(value: unknown): unknown {
 // ─── Validation ───────────────────────────────────────────────────────────────
 
 const VALID_PROVIDERS: AgentProvider[] = ['openai-compatible', 'anthropic-native', 'groq'];
+const VALID_DB_PROVIDERS = ['sqlite', 'postgres'] as const;
 
 function err(msg: string): never {
   throw new Error(`Config error: ${msg}`);
@@ -118,7 +127,27 @@ export function validateConfig(raw: unknown): Config {
     return { id, title, ...(description ? { description } : {}), ...(difficulty ? { difficulty } : {}), ...(tags ? { tags } : {}) };
   });
 
-  return { agent, constraints, prompts };
+  // ── database ──
+  const rawDb = assertObj(root.database, 'database');
+
+  const dbProvider = rawDb.provider;
+  if (!VALID_DB_PROVIDERS.includes(dbProvider as 'sqlite' | 'postgres')) {
+    err(`database.provider must be one of: ${VALID_DB_PROVIDERS.join(', ')}`);
+  }
+  const jwt_secret = assertNonEmptyString(rawDb.jwt_secret, 'database.jwt_secret');
+  const db_path = typeof rawDb.path === 'string' ? rawDb.path : undefined;
+  const link_expiry_hours = rawDb.link_expiry_hours !== undefined
+    ? assertPositiveNumber(rawDb.link_expiry_hours, 'link_expiry_hours')
+    : undefined;
+
+  const database: DatabaseConfig = {
+    provider: dbProvider as 'sqlite' | 'postgres',
+    jwt_secret,
+    ...(db_path ? { path: db_path } : {}),
+    ...(link_expiry_hours !== undefined ? { link_expiry_hours } : {}),
+  };
+
+  return { agent, constraints, prompts, database };
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
