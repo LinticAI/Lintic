@@ -30,12 +30,12 @@ For UI stories, also include:
 **Description:** As a developer, I need the monorepo structure set up with shared config so all packages can build and typecheck independently.
 
 **Acceptance Criteria:**
-- [ ] Create packages/core, packages/frontend, packages/adapters, packages/cli directories
-- [ ] Root package.json with npm workspaces configured
-- [ ] Shared tsconfig.base.json extended by each package
-- [ ] ESLint config at root shared across packages
-- [ ] `npm run typecheck` passes from root
-- [ ] `npm run lint` passes from root
+- [x] Create packages/core, packages/frontend, packages/adapters, packages/cli directories
+- [x] Root package.json with npm workspaces configured
+- [x] Shared tsconfig.base.json extended by each package
+- [x] ESLint config at root shared across packages
+- [x] `npm run typecheck` passes from root
+- [x] `npm run lint` passes from root
 
 ### US-002: Core session data models and types
 

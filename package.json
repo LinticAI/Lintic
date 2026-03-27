@@ -1,0 +1,23 @@
+{
+  "name": "lintic",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Open-source agentic AI coding assessment platform",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0",
+    "eslint": "^9.0.0",
+    "vitest": "^2.0.0"
+  }
+}
