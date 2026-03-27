@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { SignJWT, jwtVerify } from 'jose';
+import { SignJWT } from 'jose';
 import type { DatabaseAdapter, CreateSessionParams } from './database.js';
 import type { Session, Message, MessageRole, Constraint } from './types.js';
 
