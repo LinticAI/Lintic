@@ -123,3 +123,12 @@ Recorded with timestamps: `message`, `agent_response`, `code_change`, `terminal_
 - **Phase 4 (Future)**: Python/Go runtimes, collaborative assessments, ATS integrations
 
 User stories US-001 through US-028 in `PRD.md` define acceptance criteria for each feature.
+
+## Testing Requirements
+
+Every completed user story **must** include Vitest unit tests:
+
+- Tests live alongside the source file: `src/foo.ts` → `src/foo.test.ts`
+- Cover all acceptance criteria listed in `PRD.md` for that story
+- Mock all external I/O (HTTP, filesystem, DB) — no real API calls or disk writes
+- A story PR will not be merged unless `npm run test` passes with tests for that story present
