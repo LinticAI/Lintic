@@ -13,13 +13,12 @@ npm run test
 
 ## Contributing
 
-### The Golden Rule: One User Story at a Time
+### The Golden Rules
 
-Every piece of work maps to a user story in `PRD.md`. Before writing any code:
-
-1. Find the next unchecked user story in `PRD.md`
-2. Read its acceptance criteria fully
-3. Do not start the next story until all criteria for the current one are checked off
+1. **Never commit directly to `main`.** All work happens on a feature branch and merges via PR.
+2. **One user story = one PR.** Every PR must map to a single user story. No bundling multiple stories into one PR.
+3. **No story starts without a branch.** If you don't have a branch, you're not ready to write code.
+4. Do not start the next story until all acceptance criteria for the current one are checked off and the PR is merged.
 
 ### User Story Workflow
 
@@ -30,13 +29,15 @@ Create feature branch: git checkout -b us-NNN-short-description
       ↓
 Implement — test-driven where possible (write test → see it fail → make it pass)
       ↓
-Run quality gates (all must pass before marking done)
+Run quality gates (all must pass before opening PR)
       ↓
 Check off all acceptance criteria in PRD.md
       ↓
 Commit with: feat(scope): description (US-NNN)
       ↓
-Open PR targeting main
+Open PR targeting main — title must include the story ID, e.g. "[US-003] YAML config loader"
+      ↓
+PR is reviewed and merged → pick the next story
 ```
 
 ### Quality Gates
