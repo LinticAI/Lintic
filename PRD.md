@@ -1,0 +1,404 @@
+# PRD: Lintic
+
+Open-source, self-hostable platform that replaces traditional coding assessments with agentic AI workflow evaluations. Candidates get a browser-based IDE with an AI coding agent and open-ended prompts. Companies configure constraints (token budgets, interaction limits) and simulated infrastructure (Redis, Postgres, message queues). The platform records sessions and computes structured metrics on human-AI collaboration quality.
+
+## Tech Stack
+
+- Frontend: React, TypeScript, Vite, Tailwind CSS, Monaco Editor
+- Backend: Node.js, Express, TypeScript
+- Database: SQLite (via better-sqlite3) for Docker/local, PostgreSQL (via pg) for serverless/cloud. Abstract via DatabaseAdapter interface.
+- Code Runtime: WebContainers (@webcontainer/api)
+- Agent Communication: Agent Interface Protocol (internal REST API)
+- Deployment: Docker, docker-compose
+- Configuration: YAML (js-yaml)
+- Testing: Vitest (unit), Playwright (e2e)
+
+## Quality Gates
+
+These commands must pass for every user story:
+- `npm run typecheck` - TypeScript type checking
+- `npm run lint` - ESLint
+- `npm run test` - Vitest unit tests
+
+For UI stories, also include:
+- Verify in browser using dev-browser skill
+
+## User Stories
+
+### US-001: Initialize monorepo and project scaffolding
+
+**Description:** As a developer, I need the monorepo structure set up with shared config so all packages can build and typecheck independently.
+
+**Acceptance Criteria:**
+- [ ] Create packages/core, packages/frontend, packages/adapters, packages/cli directories
+- [ ] Root package.json with npm workspaces configured
+- [ ] Shared tsconfig.base.json extended by each package
+- [ ] ESLint config at root shared across packages
+- [ ] `npm run typecheck` passes from root
+- [ ] `npm run lint` passes from root
+
+### US-002: Core session data models and types
+
+**Description:** As a developer, I need TypeScript types and interfaces for sessions, constraints, metrics, and agent communication so all packages share a common contract.
+
+**Acceptance Criteria:**
+- [ ] Define Session, Constraint, AgentConfig, AgentResponse, TokenUsage types in packages/core/src/types.ts
+- [ ] Define AgentAdapter interface with init, sendMessage, getTokenUsage, getCapabilities methods
+- [ ] Define MetricResult, SessionRecording, and ReviewData types
+- [ ] Export all types from packages/core/src/index.ts
+- [ ] Typecheck passes
+
+### US-003: YAML configuration loader
+
+**Description:** As a company admin, I need the platform to read an lintic.yml file so I can configure the agent provider, constraints, and prompts in one place.
+
+**Acceptance Criteria:**
+- [ ] Parse lintic.yml using js-yaml into typed Config object
+- [ ] Validate required fields: agent.provider, agent.api_key (or env var reference), agent.model
+- [ ] Support ${ENV_VAR} syntax in string values for secrets
+- [ ] Throw descriptive errors for missing or invalid config
+- [ ] Unit tests for config parsing and validation
+- [ ] Typecheck passes
+
+### US-004: Constraint enforcer module
+
+**Description:** As a developer, I need a module that tracks token usage and interaction count per session and rejects requests that exceed configured limits.
+
+**Acceptance Criteria:**
+- [ ] ConstraintEnforcer class that accepts a Constraint config
+- [ ] Methods: canSend() returns boolean, recordUsage(tokens) updates state, getRemaining() returns budget info
+- [ ] Enforces max_session_tokens, max_message_tokens, max_interactions
+- [ ] Returns descriptive error when a constraint is violated
+- [ ] Unit tests for all constraint boundaries and edge cases
+- [ ] Typecheck passes
+
+### US-005: Database abstraction layer and SQLite adapter
+
+**Description:** As a developer, I need a DatabaseAdapter interface and a SQLite implementation so all database access goes through a common contract that can be swapped for Postgres in serverless deployments.
+
+**Acceptance Criteria:**
+- [ ] Define DatabaseAdapter interface in packages/core/src/database.ts with methods: createSession, getSession, addMessage, getMessages, closeSession, listSessions, getSessionsByPrompt
+- [ ] SQLiteAdapter implements DatabaseAdapter using better-sqlite3
+- [ ] Database initialized with sessions and messages tables on first run
+- [ ] createSession(config) returns a unique session ID and time-limited assessment link token
+- [ ] getSession(id) returns full session state including constraint usage
+- [ ] addMessage(sessionId, role, content, tokenCount) appends to messages table
+- [ ] closeSession(id) marks session as completed with timestamp
+- [ ] listSessions() returns all sessions with basic metadata and scores
+- [ ] getSessionsByPrompt(promptId) filters sessions by prompt
+- [ ] lintic.yml database.provider field selects adapter ("sqlite" default, "postgres" for Postgres)
+- [ ] Unit tests for all CRUD operations against SQLite
+- [ ] Typecheck passes
+
+### US-005b: PostgreSQL database adapter
+
+**Description:** As a company admin deploying on Vercel or other serverless platforms, I need a Postgres adapter so session data persists without a local filesystem.
+
+**Acceptance Criteria:**
+- [ ] PostgresAdapter implements DatabaseAdapter interface using pg library
+- [ ] Connects via DATABASE_URL environment variable or lintic.yml database.connection_string
+- [ ] Auto-runs CREATE TABLE IF NOT EXISTS on first connection for sessions and messages tables
+- [ ] All methods behave identically to SQLiteAdapter (same return types, same error semantics)
+- [ ] Connection pooling configured with sensible defaults (max 10 connections)
+- [ ] Graceful handling of connection failures with retry and descriptive error messages
+- [ ] Unit tests with a mocked pg client that verify query generation
+- [ ] Integration test instructions in README for running against a local Postgres
+- [ ] Typecheck passes
+
+### US-006: OpenAI-compatible agent adapter
+
+**Description:** As a company admin, I need a bundled adapter that works with any OpenAI-compatible API so I can plug in OpenAI, Groq, Together, or Ollama with just a base URL and API key.
+
+**Acceptance Criteria:**
+- [ ] Implements AgentAdapter interface from core types
+- [ ] init() validates config and sets up HTTP client
+- [ ] sendMessage() posts to /v1/chat/completions with proper format
+- [ ] Respects max_message_tokens as max_tokens parameter
+- [ ] getTokenUsage() returns prompt and completion token counts from API response
+- [ ] Handles API errors gracefully with typed error responses
+- [ ] Unit tests with mocked HTTP responses
+- [ ] Typecheck passes
+
+### US-007: Anthropic native agent adapter
+
+**Description:** As a company admin, I need a direct Anthropic adapter so I can use Claude models with native API features.
+
+**Acceptance Criteria:**
+- [ ] Implements AgentAdapter interface
+- [ ] Posts to Anthropic Messages API (/v1/messages) with correct headers
+- [ ] Maps conversation history to Anthropic's message format
+- [ ] Handles Anthropic-specific error codes (overloaded, rate_limited)
+- [ ] Unit tests with mocked HTTP responses
+- [ ] Typecheck passes
+
+### US-008: Express backend with session and agent routes
+
+**Description:** As a developer, I need an Express server that exposes REST endpoints for session management and agent message proxying.
+
+**Acceptance Criteria:**
+- [ ] POST /api/sessions creates a new session, returns session ID and assessment link
+- [ ] GET /api/sessions/:id returns session state with remaining constraints
+- [ ] POST /api/sessions/:id/messages accepts candidate message, proxies through constraint enforcer and agent adapter, returns response
+- [ ] GET /api/sessions/:id/messages returns full conversation history
+- [ ] POST /api/sessions/:id/close marks session as completed
+- [ ] Auth middleware validates assessment link tokens
+- [ ] Typecheck passes
+
+### US-009: Session recording and replay data
+
+**Description:** As a reviewer, I need all session activity (messages, code changes, timestamps) recorded so I can replay the session later.
+
+**Acceptance Criteria:**
+- [ ] Every agent request/response is stored with timestamps and token counts
+- [ ] GET /api/sessions/:id/replay returns chronologically ordered session events
+- [ ] Events include type (message, code_change, terminal_output), timestamp, and payload
+- [ ] Code change events store file path and diff content
+- [ ] Typecheck passes
+
+### US-010: Frontend shell with React, Vite, and layout
+
+**Description:** As a candidate, I need the basic app shell with a split-pane layout so I can see the IDE on one side and the agent chat on the other.
+
+**Acceptance Criteria:**
+- [ ] Vite + React + TypeScript project in packages/frontend
+- [ ] Tailwind CSS configured
+- [ ] Split-pane layout with resizable divider: left side for IDE, right side for chat
+- [ ] Top bar showing session timer, token budget remaining, and interaction count
+- [ ] Responsive: stacks vertically on smaller screens
+- [ ] Typecheck passes
+- [ ] Verify in browser using dev-browser skill
+
+### US-011: Monaco Editor integration
+
+**Description:** As a candidate, I need a code editor with syntax highlighting, file tabs, and a file tree so I can write and edit code during the assessment.
+
+**Acceptance Criteria:**
+- [ ] Monaco Editor embedded in the IDE panel
+- [ ] File tree sidebar showing WebContainer filesystem
+- [ ] Clicking a file opens it in a new editor tab
+- [ ] Multiple tabs with active tab highlighting
+- [ ] Supports JavaScript, TypeScript, JSON, CSS, HTML, Markdown syntax
+- [ ] Typecheck passes
+- [ ] Verify in browser using dev-browser skill
+
+### US-012: WebContainers runtime integration
+
+**Description:** As a candidate, I need a terminal and Node.js runtime in the browser so I can run npm commands and execute code without any server-side compute.
+
+**Acceptance Criteria:**
+- [ ] Boot a WebContainer instance on session start
+- [ ] Integrated terminal (xterm.js) connected to WebContainer shell
+- [ ] Candidates can run npm install, npm run, node commands
+- [ ] File system changes in Monaco sync to WebContainer and vice versa
+- [ ] Typecheck passes
+- [ ] Verify in browser using dev-browser skill
+
+### US-013: Agent chat panel
+
+**Description:** As a candidate, I need a chat interface to send messages to the AI agent and see responses so I can collaborate with the agent during the assessment.
+
+**Acceptance Criteria:**
+- [ ] Chat panel on the right side with message input at the bottom
+- [ ] Messages display with role indicators (You / Agent)
+- [ ] Agent responses render markdown with syntax-highlighted code blocks
+- [ ] Shows loading spinner while waiting for agent response
+- [ ] Displays remaining token budget and interaction count above the input
+- [ ] Input disabled when constraints are exhausted
+- [ ] Typecheck passes
+- [ ] Verify in browser using dev-browser skill
+
+### US-014: Constraint dashboard in candidate view
+
+**Description:** As a candidate, I need to see my remaining budget in real time so I can make strategic decisions about when to prompt the agent.
+
+**Acceptance Criteria:**
+- [ ] Top bar shows time remaining (countdown), tokens remaining (bar), interactions remaining (count)
+- [ ] Budget bar changes color from green to yellow to red as tokens deplete
+- [ ] Warning toast at 20% remaining tokens and 20% remaining interactions
+- [ ] Timer shows minutes:seconds, flashes red under 5 minutes
+- [ ] Typecheck passes
+- [ ] Verify in browser using dev-browser skill
+
+### US-015: Metric computation engine
+
+**Description:** As a reviewer, I need automated metrics computed from session data so I can evaluate candidates without manually reviewing every message.
+
+**Acceptance Criteria:**
+- [ ] Compute iteration efficiency: productive interactions / total interactions
+- [ ] Compute token efficiency: final code correctness score / total tokens consumed
+- [ ] Compute independence ratio: manually edited lines / total lines in final code
+- [ ] Compute recovery score: successful corrections / total agent errors encountered
+- [ ] All metrics return a 0-1 normalized score
+- [ ] Unit tests for each metric computation
+- [ ] Typecheck passes
+
+### US-016: Review dashboard with session replay
+
+**Description:** As a reviewer, I need a dashboard to view candidate session metrics and replay the session timeline.
+
+**Acceptance Criteria:**
+- [ ] GET /review/:sessionId route renders the review page
+- [ ] Summary cards showing all computed metrics with labels
+- [ ] Timeline scrubber that synchronizes conversation replay with code diff view
+- [ ] Clicking a timeline event scrolls the conversation and shows the corresponding code state
+- [ ] Export button generates JSON report of all metrics and conversation log
+- [ ] Typecheck passes
+- [ ] Verify in browser using dev-browser skill
+
+### US-017: Assessment link generation and auth
+
+**Description:** As a company admin, I need to generate unique, time-limited assessment links for candidates so each candidate gets their own isolated session.
+
+**Acceptance Criteria:**
+- [ ] CLI command: npx lintic generate-link --prompt library-api --email candidate@example.com
+- [ ] Generates a signed JWT with session config, prompt ID, and expiry
+- [ ] Candidate opening the link in a browser starts a new session automatically
+- [ ] Expired links show a clear "assessment expired" message
+- [ ] Unit tests for token generation and validation
+- [ ] Typecheck passes
+
+### US-018: Prompt configuration and display
+
+**Description:** As a candidate, I need to see the assessment prompt clearly when I start my session so I know what to build.
+
+**Acceptance Criteria:**
+- [ ] Prompts defined in lintic.yml under prompts array with id, title, description, tags
+- [ ] On session start, prompt title and description render in a dismissible panel above the IDE
+- [ ] Prompt remains accessible via a "View Prompt" button in the top bar
+- [ ] Typecheck passes
+- [ ] Verify in browser using dev-browser skill
+
+### US-019: Docker build and compose configuration
+
+**Description:** As a company admin, I need a single Docker image that runs the entire platform so I can deploy with docker compose up.
+
+**Acceptance Criteria:**
+- [ ] Multi-stage Dockerfile: build frontend, build backend, production image with both
+- [ ] docker-compose.yml with single service, volume mount for lintic.yml and SQLite data
+- [ ] Environment variable passthrough for API keys
+- [ ] Container starts Express server serving frontend static files and API routes
+- [ ] Health check endpoint at GET /health
+- [ ] Typecheck passes
+
+### US-020: Redis infrastructure mock package
+
+**Description:** As a candidate, I need a Redis-compatible mock that runs in WebContainers so I can implement caching in my assessment solution.
+
+**Acceptance Criteria:**
+- [ ] npm package (lintic-mock-redis) installable inside WebContainers
+- [ ] Supports get, set, del, expire, ttl, keys, hget, hset, hgetall, lpush, lrange, sadd, smembers
+- [ ] Configurable memory limit with LRU eviction when exceeded
+- [ ] Simulated latency (configurable base + random spike probability)
+- [ ] Connection pool limit that throws when exceeded
+- [ ] Unit tests for all commands and eviction behavior
+- [ ] Typecheck passes
+
+### US-021: PostgreSQL infrastructure mock package
+
+**Description:** As a candidate, I need a SQL-compatible mock so I can implement database queries in my assessment solution.
+
+**Acceptance Criteria:**
+- [ ] npm package (lintic-mock-pg) installable inside WebContainers
+- [ ] Supports CREATE TABLE, INSERT, SELECT (with WHERE, ORDER BY, LIMIT), UPDATE, DELETE
+- [ ] In-memory storage engine with basic index simulation
+- [ ] Configurable connection pool limit
+- [ ] Slow query logging when no index matches a WHERE clause
+- [ ] Unit tests for SQL parsing and query execution
+- [ ] Typecheck passes
+
+### US-022: Infrastructure difficulty profiles
+
+**Description:** As a company admin, I need pre-built difficulty profiles so I can configure infrastructure behavior without setting every parameter.
+
+**Acceptance Criteria:**
+- [ ] Define gentle, realistic, and adversarial profiles in packages/core/src/profiles.ts
+- [ ] gentle: no failures, generous limits, zero simulated latency
+- [ ] realistic: occasional latency spikes (2% probability), moderate connection limits
+- [ ] adversarial: frequent spikes (10%), tight pools, aggressive eviction, intermittent failures
+- [ ] Profile is specified in lintic.yml under infrastructure.profile
+- [ ] Custom overrides merge on top of the base profile
+- [ ] Unit tests for profile merging logic
+- [ ] Typecheck passes
+
+### US-023: Infrastructure metrics collection
+
+**Description:** As a reviewer, I need infrastructure-specific metrics so I can evaluate how candidates handle system design challenges.
+
+**Acceptance Criteria:**
+- [ ] Track cache hit rate, miss rate, and eviction count for Redis mock
+- [ ] Track slow queries, connection pool usage, and failed queries for Postgres mock
+- [ ] Aggregate into caching_effectiveness, error_handling_coverage, and scaling_awareness scores
+- [ ] Include infrastructure metrics in the session replay and review dashboard
+- [ ] Unit tests for metric aggregation
+- [ ] Typecheck passes
+
+### US-024: CLI for session management and result export
+
+**Description:** As a company admin, I need CLI tools so I can manage assessments, generate links, and export results without a web admin dashboard.
+
+**Acceptance Criteria:**
+- [ ] npx lintic init generates a starter lintic.yml with commented examples
+- [ ] npx lintic generate-link --prompt <id> --email <email> outputs assessment URL
+- [ ] npx lintic list-sessions shows all sessions with status and scores
+- [ ] npx lintic export --session <id> --format json outputs full session data
+- [ ] npx lintic export --session <id> --format pdf generates a PDF summary report
+- [ ] Typecheck passes
+
+### US-025: End-to-end integration test
+
+**Description:** As a developer, I need an e2e test that validates the full flow from session creation through agent interaction to metric computation.
+
+**Acceptance Criteria:**
+- [ ] Playwright test that loads the assessment URL, sends a message to the agent, verifies the response appears
+- [ ] Verifies constraint counters decrement after each interaction
+- [ ] Verifies session can be closed and review page loads with computed metrics
+- [ ] Test uses a mock agent adapter that returns deterministic responses
+- [ ] All tests pass in CI (GitHub Actions)
+- [ ] Typecheck passes
+
+### US-026: Candidate comparison dashboard
+
+**Description:** As a reviewer, I need a table view of all candidates who took the same assessment so I can compare scores, sort by metrics, and quickly identify top performers.
+
+**Acceptance Criteria:**
+- [ ] GET /review route renders a dashboard listing all completed sessions
+- [ ] Table columns: candidate email, prompt title, date, overall score, and each individual metric (PQ, IE, CC, TE, RS, IR)
+- [ ] Clicking any column header sorts the table by that metric (ascending/descending toggle)
+- [ ] Filter dropdown to show only sessions for a specific prompt
+- [ ] Filter by date range (last 7 days, 30 days, all time)
+- [ ] Clicking a row navigates to the individual session replay at /review/:sessionId
+- [ ] Composite score is a weighted average of all metrics (weights configurable in lintic.yml)
+- [ ] Table supports pagination (25 candidates per page)
+- [ ] npm run typecheck passes
+- [ ] Verify in browser using dev-browser skill
+
+### US-027: Webhook and API for external integrations
+
+**Description:** As a company admin, I need Lintic to push assessment results to external systems via webhooks so results flow into our ATS, Slack, or custom tooling automatically.
+
+**Acceptance Criteria:**
+- [ ] Configure webhooks in lintic.yml under integrations.webhooks as an array of {url, events, secret}
+- [ ] Supported events: session.completed, session.scored
+- [ ] session.completed fires when a candidate closes their session, payload includes session ID, candidate email, prompt ID, and timestamp
+- [ ] session.scored fires after metrics are computed, payload includes all metric scores, composite score, and a link to the review page
+- [ ] Payloads are signed with HMAC-SHA256 using the configured secret, sent in X-Lintic-Signature header
+- [ ] Retry failed webhook deliveries up to 3 times with exponential backoff
+- [ ] GET /api/webhooks/history returns delivery log with status codes for debugging
+- [ ] Unit tests for payload signing and retry logic
+- [ ] npm run typecheck passes
+
+### US-028: S3-compatible session backup
+
+**Description:** As a company admin, I need session recordings backed up to S3-compatible storage so session data survives beyond the local SQLite database and can be archived long-term.
+
+**Acceptance Criteria:**
+- [ ] Configure backup in lintic.yml under storage.backup with endpoint, bucket, access_key_id, secret_access_key, and region
+- [ ] Support any S3-compatible provider (AWS S3, MinIO, Cloudflare R2, Backblaze B2)
+- [ ] After a session is scored, automatically upload a JSON archive containing full session data, messages, code snapshots, and computed metrics
+- [ ] Archive file path: s3://bucket/lintic/sessions/{sessionId}.json
+- [ ] npx lintic backup --all uploads all sessions not yet backed up
+- [ ] npx lintic restore --session <id> downloads and imports a session from S3 into local SQLite
+- [ ] Backup failures log warnings but do not block session completion
+- [ ] Unit tests for S3 upload and restore logic with mocked S3 client
+- [ ] npm run typecheck passes
+
