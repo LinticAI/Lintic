@@ -3,3 +3,4 @@ export * from './types.js';
 export * from './config.js';
 export * from './constraint-enforcer.js';
 export * from './database.js';
+export * from './sqlite-adapter.js';

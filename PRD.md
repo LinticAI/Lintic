@@ -77,18 +77,18 @@ For UI stories, also include:
 **Description:** As a developer, I need a DatabaseAdapter interface and a SQLite implementation so all database access goes through a common contract that can be swapped for Postgres in serverless deployments.
 
 **Acceptance Criteria:**
-- [ ] Define DatabaseAdapter interface in packages/core/src/database.ts with methods: createSession, getSession, addMessage, getMessages, closeSession, listSessions, getSessionsByPrompt
-- [ ] SQLiteAdapter implements DatabaseAdapter using better-sqlite3
-- [ ] Database initialized with sessions and messages tables on first run
-- [ ] createSession(config) returns a unique session ID and time-limited assessment link token
-- [ ] getSession(id) returns full session state including constraint usage
-- [ ] addMessage(sessionId, role, content, tokenCount) appends to messages table
-- [ ] closeSession(id) marks session as completed with timestamp
-- [ ] listSessions() returns all sessions with basic metadata and scores
-- [ ] getSessionsByPrompt(promptId) filters sessions by prompt
-- [ ] lintic.yml database.provider field selects adapter ("sqlite" default, "postgres" for Postgres)
-- [ ] Unit tests for all CRUD operations against SQLite
-- [ ] Typecheck passes
+- [x] Define DatabaseAdapter interface in packages/core/src/database.ts with methods: createSession, getSession, addMessage, getMessages, closeSession, listSessions, getSessionsByPrompt
+- [x] SQLiteAdapter implements DatabaseAdapter using better-sqlite3
+- [x] Database initialized with sessions and messages tables on first run
+- [x] createSession(config) returns a unique session ID and time-limited assessment link token
+- [x] getSession(id) returns full session state including constraint usage
+- [x] addMessage(sessionId, role, content, tokenCount) appends to messages table
+- [x] closeSession(id) marks session as completed with timestamp
+- [x] listSessions() returns all sessions with basic metadata and scores
+- [x] getSessionsByPrompt(promptId) filters sessions by prompt
+- [x] lintic.yml database.provider field selects adapter ("sqlite" default, "postgres" for Postgres)
+- [x] Unit tests for all CRUD operations against SQLite
+- [x] Typecheck passes
 
 ### US-005b: PostgreSQL database adapter
 
@@ -288,16 +288,24 @@ For UI stories, also include:
 - [ ] Verify in browser using dev-browser skill
 
 ### US-017: Assessment link generation and auth
-
-**Description:** As a company admin, I need to generate unique, time-limited assessment links for candidates so each candidate gets their own isolated session.
-
+ 
+**Description:** As a company admin, I need to generate assessment links both via CLI and a REST API so I can create links manually for individual candidates or programmatically from my ATS and internal tooling.
+ 
 **Acceptance Criteria:**
-- [ ] CLI command: npx lintic generate-link --prompt library-api --email candidate@example.com
-- [ ] Generates a signed JWT with session config, prompt ID, and expiry
+- [ ] CLI command: npx lintic generate-link --prompt library-api --email candidate@example.com outputs the assessment URL
+- [ ] REST API: POST /api/links accepts JSON body {prompt_id, email, expires_in_hours (optional, default 72), constraint_overrides (optional)}
+- [ ] REST API returns {url, token, expires_at, prompt_id, email}
+- [ ] REST API authenticated via API key in X-Lintic-Api-Key header, key configured in lintic.yml under api.admin_key or LINTIC_ADMIN_KEY env var
+- [ ] npx lintic init auto-generates a random admin API key and signing secret in the starter config
+- [ ] Both CLI and API generate a signed JWT with prompt ID, candidate email, constraint config, and expiry
+- [ ] JWT signed with LINTIC_SECRET_KEY, validated statelessly on any backend instance
 - [ ] Candidate opening the link in a browser starts a new session automatically
+- [ ] JWT is single-use: after a session is created from a token, the same token cannot create a second session
 - [ ] Expired links show a clear "assessment expired" message
-- [ ] Unit tests for token generation and validation
+- [ ] Invalid or already-used links show a clear "link is no longer valid" message
+- [ ] Unit tests for token generation, validation, expiry, single-use enforcement, and API key auth
 - [ ] Typecheck passes
+ 
 
 ### US-018: Prompt configuration and display
 
