@@ -1,6 +1,6 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import Database from 'better-sqlite3';
-import type { Session, SessionStatus, Constraint, MessageRole } from './types.js';
+import type { Session, SessionStatus, Constraint, MessageRole, ReplayEventType } from './types.js';
 
 // ─── Stored Message ───────────────────────────────────────────────────────────
 
@@ -11,6 +11,16 @@ export interface StoredMessage {
   content: string;
   token_count: number;
   created_at: number; // Unix ms
+}
+
+// ─── Stored Replay Event ──────────────────────────────────────────────────────
+
+export interface StoredReplayEvent {
+  id: number;
+  session_id: string;
+  type: ReplayEventType;
+  timestamp: number; // Unix ms
+  payload: unknown;
 }
 
 // ─── Create Session Config ────────────────────────────────────────────────────
@@ -33,6 +43,8 @@ export interface DatabaseAdapter {
   getSessionsByPrompt(promptId: string): Promise<Session[]>;
   validateSessionToken(id: string, token: string): Promise<boolean>;
   updateSessionUsage(id: string, additionalTokens: number, additionalInteractions: number): Promise<void>;
+  addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void>;
+  getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]>;
 }
 
 // ─── Internal DB Row Types ────────────────────────────────────────────────────
@@ -62,6 +74,14 @@ interface MessageRow {
   content: string;
   token_count: number;
   created_at: number;
+}
+
+interface ReplayEventRow {
+  id: number;
+  session_id: string;
+  type: string;
+  timestamp: number;
+  payload: string; // JSON text
 }
 
 // ─── SQLiteAdapter ────────────────────────────────────────────────────────────
@@ -102,6 +122,17 @@ export class SQLiteAdapter implements DatabaseAdapter {
         token_count INTEGER NOT NULL,
         created_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS replay_events (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        type      TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        payload   TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_replay_events_session
+        ON replay_events(session_id, timestamp ASC);
     `);
   }
 
@@ -192,6 +223,26 @@ export class SQLiteAdapter implements DatabaseAdapter {
       'UPDATE sessions SET tokens_used = tokens_used + ?, interactions_used = interactions_used + ? WHERE id = ?'
     ).run(additionalTokens, additionalInteractions, id);
     return Promise.resolve();
+  }
+
+  addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
+    this.db.prepare(
+      'INSERT INTO replay_events (session_id, type, timestamp, payload) VALUES (?, ?, ?, ?)'
+    ).run(sessionId, type, timestamp, JSON.stringify(payload));
+    return Promise.resolve();
+  }
+
+  getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
+    const rows = this.db.prepare(
+      'SELECT * FROM replay_events WHERE session_id = ? ORDER BY timestamp ASC, id ASC'
+    ).all(sessionId) as ReplayEventRow[];
+    return Promise.resolve(rows.map((r) => ({
+      id: r.id,
+      session_id: r.session_id,
+      type: r.type as ReplayEventType,
+      timestamp: r.timestamp,
+      payload: JSON.parse(r.payload) as unknown,
+    })));
   }
 }
 

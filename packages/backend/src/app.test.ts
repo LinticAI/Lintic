@@ -11,8 +11,10 @@ import type {
   SessionContext,
   Session,
   StoredMessage,
+  StoredReplayEvent,
   CreateSessionConfig,
   MessageRole,
+  ReplayEventType,
   Config,
   Constraint,
 } from '@lintic/core';
@@ -45,6 +47,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 class FakeDb implements DatabaseAdapter {
   sessions = new Map<string, Session & { token: string }>();
   messageStore = new Map<string, StoredMessage[]>();
+  replayStore = new Map<string, StoredReplayEvent[]>();
   nextMsgId = 1;
 
   async createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
@@ -116,6 +119,16 @@ class FakeDb implements DatabaseAdapter {
         interactions_used: session.interactions_used + additionalInteractions,
       });
     }
+  }
+
+  async addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
+    const events = this.replayStore.get(sessionId) ?? [];
+    events.push({ id: events.length + 1, session_id: sessionId, type, timestamp, payload });
+    this.replayStore.set(sessionId, events);
+  }
+
+  async getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
+    return this.replayStore.get(sessionId) ?? [];
   }
 }
 

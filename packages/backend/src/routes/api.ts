@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { DatabaseAdapter, AgentAdapter, Config, Message, ConstraintsRemaining, SessionContext } from '@lintic/core';
+import type { DatabaseAdapter, AgentAdapter, Config, Message, ConstraintsRemaining, SessionContext, SessionRecording } from '@lintic/core';
 import { requireToken } from '../middleware/auth.js';
 
 export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, config: Config): Router {
@@ -122,6 +122,20 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     );
     await db.updateSessionUsage(sessionId, agentResponse.usage.total_tokens, 1);
 
+    // Record replay events
+    const now = Date.now();
+    await db.addReplayEvent(sessionId, 'message', now, { role: 'user', content: message });
+    await db.addReplayEvent(sessionId, 'agent_response', now, {
+      content: agentResponse.content,
+      stop_reason: agentResponse.stop_reason,
+      usage: agentResponse.usage,
+    });
+    await db.addReplayEvent(sessionId, 'resource_usage', now, {
+      prompt_tokens: agentResponse.usage.prompt_tokens,
+      completion_tokens: agentResponse.usage.completion_tokens,
+      total_tokens: agentResponse.usage.total_tokens,
+    });
+
     res.json({
       content: agentResponse.content,
       tool_calls: agentResponse.tool_calls,
@@ -145,6 +159,24 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     const messages = await db.getMessages(req.params['id'] as string);
     res.json({ messages });
+  });
+
+  // GET /api/sessions/:id/replay — session recording for review
+  router.get('/sessions/:id/replay', requireToken(db), async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const stored = await db.getReplayEvents(sessionId);
+    const recording: SessionRecording = {
+      session_id: sessionId,
+      events: stored.map((e) => ({ type: e.type, timestamp: e.timestamp, payload: e.payload })),
+    };
+
+    res.json(recording);
   });
 
   // POST /api/sessions/:id/close — mark session as completed
