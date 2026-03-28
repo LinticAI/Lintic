@@ -13,7 +13,7 @@
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run --workspace vitest.workspace.ts"
   },
   "devDependencies": {
     "typescript": "^5.5.0",
