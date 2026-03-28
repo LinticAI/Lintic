@@ -110,26 +110,26 @@ For UI stories, also include:
 **Description:** As a company admin, I need a bundled adapter that works with any OpenAI-compatible API so I can plug in OpenAI, Groq, Together, or Ollama with just a base URL and API key.
 
 **Acceptance Criteria:**
-- [ ] Implements AgentAdapter interface from core types
-- [ ] init() validates config and sets up HTTP client
-- [ ] sendMessage() posts to /v1/chat/completions with proper format
-- [ ] Respects max_message_tokens as max_tokens parameter
-- [ ] getTokenUsage() returns prompt and completion token counts from API response
-- [ ] Handles API errors gracefully with typed error responses
-- [ ] Unit tests with mocked HTTP responses
-- [ ] Typecheck passes
+- [x] Implements AgentAdapter interface from core types
+- [x] init() validates config and sets up HTTP client
+- [x] sendMessage() posts to /v1/chat/completions with proper format
+- [x] Respects max_message_tokens as max_tokens parameter
+- [x] getTokenUsage() returns prompt and completion token counts from API response
+- [x] Handles API errors gracefully with typed error responses
+- [x] Unit tests with mocked HTTP responses
+- [x] Typecheck passes
 
 ### US-007: Anthropic native agent adapter
 
 **Description:** As a company admin, I need a direct Anthropic adapter so I can use Claude models with native API features.
 
 **Acceptance Criteria:**
-- [ ] Implements AgentAdapter interface
-- [ ] Posts to Anthropic Messages API (/v1/messages) with correct headers
-- [ ] Maps conversation history to Anthropic's message format
-- [ ] Handles Anthropic-specific error codes (overloaded, rate_limited)
-- [ ] Unit tests with mocked HTTP responses
-- [ ] Typecheck passes
+- [x] Implements AgentAdapter interface
+- [x] Posts to Anthropic Messages API (/v1/messages) with correct headers
+- [x] Maps conversation history to Anthropic's message format
+- [x] Handles Anthropic-specific error codes (overloaded, rate_limited)
+- [x] Unit tests with mocked HTTP responses
+- [x] Typecheck passes
 
 ### US-007a: Agent tool definitions and executor
 
