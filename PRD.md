@@ -178,13 +178,13 @@ For UI stories, also include:
 **Description:** As a developer, I need an Express server that exposes REST endpoints for session management and agent message proxying.
 
 **Acceptance Criteria:**
-- [ ] POST /api/sessions creates a new session, returns session ID and assessment link
-- [ ] GET /api/sessions/:id returns session state with remaining constraints
-- [ ] POST /api/sessions/:id/messages accepts candidate message, proxies through constraint enforcer and agent adapter, returns response
-- [ ] GET /api/sessions/:id/messages returns full conversation history
-- [ ] POST /api/sessions/:id/close marks session as completed
-- [ ] Auth middleware validates assessment link tokens
-- [ ] Typecheck passes
+- [x] POST /api/sessions creates a new session, returns session ID and assessment link
+- [x] GET /api/sessions/:id returns session state with remaining constraints
+- [x] POST /api/sessions/:id/messages accepts candidate message, proxies through constraint enforcer and agent adapter, returns response
+- [x] GET /api/sessions/:id/messages returns full conversation history
+- [x] POST /api/sessions/:id/close marks session as completed
+- [x] Auth middleware validates assessment link tokens
+- [x] Typecheck passes
 
 ### US-009: Session recording and replay data
 

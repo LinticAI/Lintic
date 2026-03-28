@@ -31,6 +31,8 @@ export interface DatabaseAdapter {
   closeSession(id: string): Promise<void>;
   listSessions(): Promise<Session[]>;
   getSessionsByPrompt(promptId: string): Promise<Session[]>;
+  validateSessionToken(id: string, token: string): Promise<boolean>;
+  updateSessionUsage(id: string, additionalTokens: number, additionalInteractions: number): Promise<void>;
 }
 
 // ─── Internal DB Row Types ────────────────────────────────────────────────────
@@ -176,6 +178,20 @@ export class SQLiteAdapter implements DatabaseAdapter {
       'SELECT * FROM sessions WHERE prompt_id = ? ORDER BY created_at DESC'
     ).all(promptId) as SessionRow[];
     return Promise.resolve(rows.map(rowToSession));
+  }
+
+  validateSessionToken(id: string, token: string): Promise<boolean> {
+    const row = this.db.prepare(
+      'SELECT id FROM sessions WHERE id = ? AND token = ?'
+    ).get(id, token);
+    return Promise.resolve(row !== undefined);
+  }
+
+  updateSessionUsage(id: string, additionalTokens: number, additionalInteractions: number): Promise<void> {
+    this.db.prepare(
+      'UPDATE sessions SET tokens_used = tokens_used + ?, interactions_used = interactions_used + ? WHERE id = ?'
+    ).run(additionalTokens, additionalInteractions, id);
+    return Promise.resolve();
   }
 }
 
