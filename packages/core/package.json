@@ -10,9 +10,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "better-sqlite3": "^9.0.0",
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0"
   }

@@ -12,10 +12,17 @@ export interface PromptConfig {
   tags?: string[];
 }
 
+export interface DatabaseConfig {
+  provider: 'sqlite' | 'postgres';
+  path?: string;             // SQLite file path (default: lintic.db)
+  connection_string?: string; // Postgres connection string
+}
+
 export interface Config {
   agent: AgentConfig;
   constraints: Constraint;
   prompts: PromptConfig[];
+  database?: DatabaseConfig;
 }
 
 // ─── Env Var Resolution ───────────────────────────────────────────────────────
@@ -118,7 +125,20 @@ export function validateConfig(raw: unknown): Config {
     return { id, title, ...(description ? { description } : {}), ...(difficulty ? { difficulty } : {}), ...(tags ? { tags } : {}) };
   });
 
-  return { agent, constraints, prompts };
+  // ── database (optional) ──
+  let database: DatabaseConfig | undefined;
+  if (root.database !== undefined) {
+    const rawDb = assertObj(root.database, 'database');
+    const dbProvider = rawDb.provider;
+    if (dbProvider !== 'sqlite' && dbProvider !== 'postgres') {
+      err("database.provider must be 'sqlite' or 'postgres'");
+    }
+    database = { provider: dbProvider };
+    if (typeof rawDb.path === 'string') database.path = rawDb.path;
+    if (typeof rawDb.connection_string === 'string') database.connection_string = rawDb.connection_string;
+  }
+
+  return { agent, constraints, prompts, ...(database ? { database } : {}) };
 }
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
