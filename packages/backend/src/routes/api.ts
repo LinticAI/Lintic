@@ -1,12 +1,19 @@
 import { Router } from 'express';
+import type { Request, Response, RequestHandler } from 'express';
 import type { DatabaseAdapter, AgentAdapter, Config, Message, ConstraintsRemaining, SessionContext, SessionRecording } from '@lintic/core';
 import { requireToken } from '../middleware/auth.js';
+
+function asyncRoute(fn: (req: Request, res: Response) => Promise<void>): RequestHandler {
+  return (req, res, next) => {
+    fn(req, res).catch(next);
+  };
+}
 
 export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, config: Config): Router {
   const router = Router();
 
   // POST /api/sessions — create a new session
-  router.post('/sessions', async (req, res) => {
+  router.post('/sessions', asyncRoute(async (req, res) => {
     const body = req.body as { prompt_id?: unknown; candidate_email?: unknown };
 
     if (typeof body.prompt_id !== 'string' || !body.prompt_id) {
@@ -29,10 +36,10 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       token,
       assessment_link: `/assessment/${id}?token=${token}`,
     });
-  });
+  }));
 
   // GET /api/sessions/:id — get session state with remaining constraints
-  router.get('/sessions/:id', requireToken(db), async (req, res) => {
+  router.get('/sessions/:id', requireToken(db), asyncRoute(async (req, res) => {
     const session = await db.getSession(req.params['id'] as string);
     if (!session) {
       res.status(404).json({ error: 'Session not found' });
@@ -48,10 +55,10 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     };
 
     res.json({ session, constraints_remaining });
-  });
+  }));
 
   // POST /api/sessions/:id/messages — proxy candidate message through constraint enforcer and agent adapter
-  router.post('/sessions/:id/messages', requireToken(db), async (req, res) => {
+  router.post('/sessions/:id/messages', requireToken(db), asyncRoute(async (req, res) => {
     const sessionId = req.params['id'] as string;
     const body = req.body as { message?: unknown };
 
@@ -147,10 +154,10 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         seconds_remaining: constraints_remaining.seconds_remaining,
       },
     });
-  });
+  }));
 
   // GET /api/sessions/:id/messages — full conversation history
-  router.get('/sessions/:id/messages', requireToken(db), async (req, res) => {
+  router.get('/sessions/:id/messages', requireToken(db), asyncRoute(async (req, res) => {
     const session = await db.getSession(req.params['id'] as string);
     if (!session) {
       res.status(404).json({ error: 'Session not found' });
@@ -159,10 +166,10 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     const messages = await db.getMessages(req.params['id'] as string);
     res.json({ messages });
-  });
+  }));
 
   // GET /api/sessions/:id/replay — session recording for review
-  router.get('/sessions/:id/replay', requireToken(db), async (req, res) => {
+  router.get('/sessions/:id/replay', requireToken(db), asyncRoute(async (req, res) => {
     const sessionId = req.params['id'] as string;
     const session = await db.getSession(sessionId);
     if (!session) {
@@ -177,10 +184,10 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     };
 
     res.json(recording);
-  });
+  }));
 
   // POST /api/sessions/:id/close — mark session as completed
-  router.post('/sessions/:id/close', requireToken(db), async (req, res) => {
+  router.post('/sessions/:id/close', requireToken(db), asyncRoute(async (req, res) => {
     const session = await db.getSession(req.params['id'] as string);
     if (!session) {
       res.status(404).json({ error: 'Session not found' });
@@ -189,7 +196,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     await db.closeSession(req.params['id'] as string);
     res.json({ status: 'completed' });
-  });
+  }));
 
   return router;
 }

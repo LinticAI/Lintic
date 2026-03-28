@@ -36,7 +36,7 @@ class FakeDb implements DatabaseAdapter {
   replayStore = new Map<string, StoredReplayEvent[]>();
   nextMsgId = 1;
 
-  async createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
+  createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
     const id = `sess-${this.sessions.size + 1}`;
     const token = 'test-token-abc';
     const session = {
@@ -53,44 +53,46 @@ class FakeDb implements DatabaseAdapter {
     this.sessions.set(id, session);
     this.messageStore.set(id, []);
     this.replayStore.set(id, []);
-    return { id, token };
+    return Promise.resolve({ id, token });
   }
 
-  async getSession(id: string): Promise<Session | null> {
-    return this.sessions.get(id) ?? null;
+  getSession(id: string): Promise<Session | null> {
+    return Promise.resolve(this.sessions.get(id) ?? null);
   }
 
-  async addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void> {
+  addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void> {
     const msgs = this.messageStore.get(sessionId) ?? [];
     msgs.push({ id: this.nextMsgId++, session_id: sessionId, role, content, token_count: tokenCount, created_at: Date.now() });
     this.messageStore.set(sessionId, msgs);
+    return Promise.resolve();
   }
 
-  async getMessages(sessionId: string): Promise<StoredMessage[]> {
-    return this.messageStore.get(sessionId) ?? [];
+  getMessages(sessionId: string): Promise<StoredMessage[]> {
+    return Promise.resolve(this.messageStore.get(sessionId) ?? []);
   }
 
-  async closeSession(id: string): Promise<void> {
+  closeSession(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (session) {
       this.sessions.set(id, { ...session, status: 'completed', closed_at: Date.now() });
     }
+    return Promise.resolve();
   }
 
-  async listSessions(): Promise<Session[]> {
-    return [...this.sessions.values()];
+  listSessions(): Promise<Session[]> {
+    return Promise.resolve([...this.sessions.values()]);
   }
 
-  async getSessionsByPrompt(promptId: string): Promise<Session[]> {
-    return [...this.sessions.values()].filter((s) => s.prompt_id === promptId);
+  getSessionsByPrompt(promptId: string): Promise<Session[]> {
+    return Promise.resolve([...this.sessions.values()].filter((s) => s.prompt_id === promptId));
   }
 
-  async validateSessionToken(id: string, token: string): Promise<boolean> {
+  validateSessionToken(id: string, token: string): Promise<boolean> {
     const session = this.sessions.get(id);
-    return session?.token === token;
+    return Promise.resolve(session?.token === token);
   }
 
-  async updateSessionUsage(id: string, additionalTokens: number, additionalInteractions: number): Promise<void> {
+  updateSessionUsage(id: string, additionalTokens: number, additionalInteractions: number): Promise<void> {
     const session = this.sessions.get(id);
     if (session) {
       this.sessions.set(id, {
@@ -99,16 +101,18 @@ class FakeDb implements DatabaseAdapter {
         interactions_used: session.interactions_used + additionalInteractions,
       });
     }
+    return Promise.resolve();
   }
 
-  async addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
+  addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
     const events = this.replayStore.get(sessionId) ?? [];
     events.push({ id: events.length + 1, session_id: sessionId, type, timestamp, payload });
     this.replayStore.set(sessionId, events);
+    return Promise.resolve();
   }
 
-  async getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
-    return this.replayStore.get(sessionId) ?? [];
+  getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
+    return Promise.resolve(this.replayStore.get(sessionId) ?? []);
   }
 }
 
@@ -117,14 +121,16 @@ class FakeDb implements DatabaseAdapter {
 class FakeAdapter implements AgentAdapter {
   lastUsage: TokenUsage = { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 };
 
-  async init(_config: AgentConfig): Promise<void> {}
+  init(_config: AgentConfig): Promise<void> {
+    return Promise.resolve();
+  }
 
-  async sendMessage(_msg: string, _ctx: SessionContext): Promise<AgentResponse> {
-    return {
+  sendMessage(_msg: string, _ctx: SessionContext): Promise<AgentResponse> {
+    return Promise.resolve({
       content: 'Hello from the agent!',
       usage: this.lastUsage,
       stop_reason: 'end_turn',
-    };
+    });
   }
 
   getTokenUsage(): TokenUsage {
@@ -174,7 +180,7 @@ describe('GET /api/sessions/:id/replay', () => {
       status: 'active', created_at: Date.now(), constraint: BASE_CONSTRAINT,
       tokens_used: 0, interactions_used: 0,
     });
-    db.getSession = async () => null;
+    db.getSession = (): Promise<Session | null> => Promise.resolve(null);
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const res = await request(app)
       .get('/api/sessions/ghost/replay')
@@ -190,8 +196,9 @@ describe('GET /api/sessions/:id/replay', () => {
       .get(`/api/sessions/${id}/replay`)
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.events)).toBe(true);
-    expect(res.body.events).toHaveLength(0);
+    const body = res.body as { events: unknown[] };
+    expect(Array.isArray(body.events)).toBe(true);
+    expect(body.events).toHaveLength(0);
   });
 
   test('returns session_id in response body', async () => {
@@ -201,7 +208,8 @@ describe('GET /api/sessions/:id/replay', () => {
     const res = await request(app)
       .get(`/api/sessions/${id}/replay`)
       .set('Authorization', `Bearer ${token}`);
-    expect(res.body.session_id).toBe(id);
+    const body = res.body as { session_id: string };
+    expect(body.session_id).toBe(id);
   });
 
   test('after sending a message, replay contains message, agent_response, and resource_usage events', async () => {
@@ -219,7 +227,8 @@ describe('GET /api/sessions/:id/replay', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    const types = (res.body.events as Array<{ type: string }>).map((e) => e.type);
+    const body = res.body as { events: Array<{ type: string }> };
+    const types = body.events.map((e) => e.type);
     expect(types).toContain('message');
     expect(types).toContain('agent_response');
     expect(types).toContain('resource_usage');
@@ -239,7 +248,8 @@ describe('GET /api/sessions/:id/replay', () => {
       .get(`/api/sessions/${id}/replay`)
       .set('Authorization', `Bearer ${token}`);
 
-    for (const event of res.body.events as Array<{ timestamp: unknown }>) {
+    const body = res.body as { events: Array<{ timestamp: number }> };
+    for (const event of body.events) {
       expect(typeof event.timestamp).toBe('number');
     }
   });
@@ -258,8 +268,8 @@ describe('GET /api/sessions/:id/replay', () => {
       .get(`/api/sessions/${id}/replay`)
       .set('Authorization', `Bearer ${token}`);
 
-    const messageEvent = (res.body.events as Array<{ type: string; payload: Record<string, unknown> }>)
-      .find((e) => e.type === 'message');
+    const body = res.body as { events: Array<{ type: string; payload: { role: string; content: string } }> };
+    const messageEvent = body.events.find((e) => e.type === 'message');
     expect(messageEvent?.payload.role).toBe('user');
     expect(messageEvent?.payload.content).toBe('Write a test');
   });
@@ -278,8 +288,8 @@ describe('GET /api/sessions/:id/replay', () => {
       .get(`/api/sessions/${id}/replay`)
       .set('Authorization', `Bearer ${token}`);
 
-    const agentEvent = (res.body.events as Array<{ type: string; payload: Record<string, unknown> }>)
-      .find((e) => e.type === 'agent_response');
+    const body = res.body as { events: Array<{ type: string; payload: { content: string; stop_reason: string; usage: unknown } }> };
+    const agentEvent = body.events.find((e) => e.type === 'agent_response');
     expect(agentEvent?.payload.content).toBe('Hello from the agent!');
     expect(agentEvent?.payload.stop_reason).toBe('end_turn');
     expect(agentEvent?.payload.usage).toBeDefined();
@@ -299,8 +309,8 @@ describe('GET /api/sessions/:id/replay', () => {
       .get(`/api/sessions/${id}/replay`)
       .set('Authorization', `Bearer ${token}`);
 
-    const usageEvent = (res.body.events as Array<{ type: string; payload: Record<string, unknown> }>)
-      .find((e) => e.type === 'resource_usage');
+    const body = res.body as { events: Array<{ type: string; payload: { total_tokens: number } }> };
+    const usageEvent = body.events.find((e) => e.type === 'resource_usage');
     expect(typeof usageEvent?.payload.total_tokens).toBe('number');
     expect(usageEvent?.payload.total_tokens).toBe(30);
   });
@@ -319,7 +329,8 @@ describe('GET /api/sessions/:id/replay', () => {
       .get(`/api/sessions/${id}/replay`)
       .set('Authorization', `Bearer ${token}`);
 
-    for (const event of res.body.events as Array<{ payload: unknown }>) {
+    const body = res.body as { events: Array<{ payload: unknown }> };
+    for (const event of body.events) {
       expect(event.payload).toBeDefined();
     }
   });

@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import request from 'supertest';
 import type {
   DatabaseAdapter,
@@ -50,7 +50,7 @@ class FakeDb implements DatabaseAdapter {
   replayStore = new Map<string, StoredReplayEvent[]>();
   nextMsgId = 1;
 
-  async createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
+  createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
     const id = `sess-${this.sessions.size + 1}`;
     const token = 'test-token-abc';
     const session = {
@@ -66,14 +66,15 @@ class FakeDb implements DatabaseAdapter {
     };
     this.sessions.set(id, session);
     this.messageStore.set(id, []);
-    return { id, token };
+    this.replayStore.set(id, []);
+    return Promise.resolve({ id, token });
   }
 
-  async getSession(id: string): Promise<Session | null> {
-    return this.sessions.get(id) ?? null;
+  getSession(id: string): Promise<Session | null> {
+    return Promise.resolve(this.sessions.get(id) ?? null);
   }
 
-  async addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void> {
+  addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void> {
     const msgs = this.messageStore.get(sessionId) ?? [];
     msgs.push({
       id: this.nextMsgId++,
@@ -84,33 +85,35 @@ class FakeDb implements DatabaseAdapter {
       created_at: Date.now(),
     });
     this.messageStore.set(sessionId, msgs);
+    return Promise.resolve();
   }
 
-  async getMessages(sessionId: string): Promise<StoredMessage[]> {
-    return this.messageStore.get(sessionId) ?? [];
+  getMessages(sessionId: string): Promise<StoredMessage[]> {
+    return Promise.resolve(this.messageStore.get(sessionId) ?? []);
   }
 
-  async closeSession(id: string): Promise<void> {
+  closeSession(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (session) {
       this.sessions.set(id, { ...session, status: 'completed', closed_at: Date.now() });
     }
+    return Promise.resolve();
   }
 
-  async listSessions(): Promise<Session[]> {
-    return [...this.sessions.values()];
+  listSessions(): Promise<Session[]> {
+    return Promise.resolve([...this.sessions.values()]);
   }
 
-  async getSessionsByPrompt(promptId: string): Promise<Session[]> {
-    return [...this.sessions.values()].filter((s) => s.prompt_id === promptId);
+  getSessionsByPrompt(promptId: string): Promise<Session[]> {
+    return Promise.resolve([...this.sessions.values()].filter((s) => s.prompt_id === promptId));
   }
 
-  async validateSessionToken(id: string, token: string): Promise<boolean> {
+  validateSessionToken(id: string, token: string): Promise<boolean> {
     const session = this.sessions.get(id);
-    return session?.token === token;
+    return Promise.resolve(session?.token === token);
   }
 
-  async updateSessionUsage(id: string, additionalTokens: number, additionalInteractions: number): Promise<void> {
+  updateSessionUsage(id: string, additionalTokens: number, additionalInteractions: number): Promise<void> {
     const session = this.sessions.get(id);
     if (session) {
       this.sessions.set(id, {
@@ -119,16 +122,18 @@ class FakeDb implements DatabaseAdapter {
         interactions_used: session.interactions_used + additionalInteractions,
       });
     }
+    return Promise.resolve();
   }
 
-  async addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
+  addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
     const events = this.replayStore.get(sessionId) ?? [];
     events.push({ id: events.length + 1, session_id: sessionId, type, timestamp, payload });
     this.replayStore.set(sessionId, events);
+    return Promise.resolve();
   }
 
-  async getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
-    return this.replayStore.get(sessionId) ?? [];
+  getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
+    return Promise.resolve(this.replayStore.get(sessionId) ?? []);
   }
 }
 
@@ -137,14 +142,16 @@ class FakeDb implements DatabaseAdapter {
 class FakeAdapter implements AgentAdapter {
   lastUsage: TokenUsage = { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 };
 
-  async init(_config: AgentConfig): Promise<void> {}
+  init(_config: AgentConfig): Promise<void> {
+    return Promise.resolve();
+  }
 
-  async sendMessage(_msg: string, _ctx: SessionContext): Promise<AgentResponse> {
-    return {
+  sendMessage(_msg: string, _ctx: SessionContext): Promise<AgentResponse> {
+    return Promise.resolve({
       content: 'Hello from the agent!',
       usage: this.lastUsage,
       stop_reason: 'end_turn',
-    };
+    });
   }
 
   getTokenUsage(): TokenUsage {
@@ -187,9 +194,10 @@ describe('POST /api/sessions', () => {
       .send({ prompt_id: 'test-prompt', candidate_email: 'a@b.com' });
 
     expect(res.status).toBe(201);
-    expect(typeof res.body.session_id).toBe('string');
-    expect(typeof res.body.token).toBe('string');
-    expect(res.body.assessment_link).toContain(res.body.session_id);
+    const body = res.body as { session_id: string; token: string; assessment_link: string };
+    expect(typeof body.session_id).toBe('string');
+    expect(typeof body.token).toBe('string');
+    expect(body.assessment_link).toContain(body.session_id);
   });
 
   test('returns 400 when prompt_id is missing', async () => {
@@ -238,7 +246,8 @@ describe('GET /api/sessions/:id', () => {
     // Delete from sessions after seeding to trigger 404 path — simpler: use getSession returning null.
     // Use a custom override:
     const origGet = db.getSession.bind(db);
-    db.getSession = async (id: string) => (id === 'unknown-id' ? null : origGet(id));
+    db.getSession = (id: string): Promise<Session | null> =>
+      id === 'unknown-id' ? Promise.resolve(null) : origGet(id);
     const res = await request(app)
       .get('/api/sessions/unknown-id')
       .set('Authorization', 'Bearer tok');
@@ -254,10 +263,11 @@ describe('GET /api/sessions/:id', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.session.id).toBe(id);
-    expect(typeof res.body.constraints_remaining.tokens_remaining).toBe('number');
-    expect(typeof res.body.constraints_remaining.interactions_remaining).toBe('number');
-    expect(typeof res.body.constraints_remaining.seconds_remaining).toBe('number');
+    const body = res.body as { session: { id: string }; constraints_remaining: { tokens_remaining: number; interactions_remaining: number; seconds_remaining: number } };
+    expect(body.session.id).toBe(id);
+    expect(typeof body.constraints_remaining.tokens_remaining).toBe('number');
+    expect(typeof body.constraints_remaining.interactions_remaining).toBe('number');
+    expect(typeof body.constraints_remaining.seconds_remaining).toBe('number');
   });
 });
 
@@ -293,9 +303,10 @@ describe('POST /api/sessions/:id/messages', () => {
       .send({ message: 'Write a function' });
 
     expect(res.status).toBe(200);
-    expect(res.body.content).toBe('Hello from the agent!');
-    expect(res.body.stop_reason).toBe('end_turn');
-    expect(typeof res.body.usage.total_tokens).toBe('number');
+    const body = res.body as { content: string; stop_reason: string; usage: { total_tokens: number } };
+    expect(body.content).toBe('Hello from the agent!');
+    expect(body.stop_reason).toBe('end_turn');
+    expect(typeof body.usage.total_tokens).toBe('number');
   });
 
   test('stores user and assistant messages in db', async () => {
@@ -365,7 +376,7 @@ describe('POST /api/sessions/:id/messages', () => {
   test('returns 502 when adapter throws', async () => {
     const db = new FakeDb();
     const adapter = new FakeAdapter();
-    adapter.sendMessage = async () => { throw new Error('API down'); };
+    adapter.sendMessage = (): Promise<AgentResponse> => { throw new Error('API down'); };
     const app = createApp(db, adapter, TEST_CONFIG);
     const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
     const res = await request(app)
@@ -384,7 +395,8 @@ describe('POST /api/sessions/:id/messages', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ message: 'Hello' });
 
-    expect(res.body.constraints_remaining.interactions_remaining).toBe(
+    const body = res.body as { constraints_remaining: { interactions_remaining: number } };
+    expect(body.constraints_remaining.interactions_remaining).toBe(
       BASE_CONSTRAINT.max_interactions - 1
     );
   });
@@ -415,8 +427,9 @@ describe('GET /api/sessions/:id/messages', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.messages)).toBe(true);
-    expect(res.body.messages.length).toBe(2); // user + assistant
+    const body = res.body as { messages: unknown[] };
+    expect(Array.isArray(body.messages)).toBe(true);
+    expect(body.messages.length).toBe(2); // user + assistant
   });
 });
 
@@ -439,7 +452,8 @@ describe('POST /api/sessions/:id/close', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('completed');
+    const body = res.body as { status: string };
+    expect(body.status).toBe('completed');
 
     const session = await db.getSession(id);
     expect(session?.status).toBe('completed');
@@ -448,7 +462,7 @@ describe('POST /api/sessions/:id/close', () => {
   test('returns 404 for unknown session', async () => {
     const db = new FakeDb();
     db.sessions.set('ghost', { ...makeSession({ id: 'ghost' }), token: 'tok' });
-    db.getSession = async () => null;
+    db.getSession = (): Promise<Session | null> => Promise.resolve(null);
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const res = await request(app)
       .post('/api/sessions/ghost/close')
@@ -464,7 +478,8 @@ describe('auth middleware', () => {
     const { id } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
     const res = await request(app).get(`/api/sessions/${id}`);
     expect(res.status).toBe(401);
-    expect(res.body.error).toMatch(/Authorization/);
+    const body = res.body as { error: string };
+    expect(body.error).toMatch(/Authorization/);
   });
 
   test('rejects requests with malformed Authorization header', async () => {
@@ -485,6 +500,7 @@ describe('auth middleware', () => {
       .get(`/api/sessions/${id}`)
       .set('Authorization', 'Bearer bad-token');
     expect(res.status).toBe(401);
-    expect(res.body.error).toMatch(/Invalid/);
+    const body = res.body as { error: string };
+    expect(body.error).toMatch(/Invalid/);
   });
 });

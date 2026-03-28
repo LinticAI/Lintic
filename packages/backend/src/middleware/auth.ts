@@ -1,8 +1,8 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { DatabaseAdapter } from '@lintic/core';
 
-export function requireToken(db: DatabaseAdapter) {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export function requireToken(db: DatabaseAdapter): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
     const authHeader = req.headers['authorization'];
     if (!authHeader?.startsWith('Bearer ')) {
       res.status(401).json({ error: 'Missing or invalid Authorization header' });
@@ -14,11 +14,14 @@ export function requireToken(db: DatabaseAdapter) {
       res.status(400).json({ error: 'Missing session ID' });
       return;
     }
-    const valid = await db.validateSessionToken(sessionId, token);
-    if (!valid) {
-      res.status(401).json({ error: 'Invalid or expired token' });
-      return;
-    }
-    next();
+    db.validateSessionToken(sessionId, token)
+      .then((valid) => {
+        if (!valid) {
+          res.status(401).json({ error: 'Invalid or expired token' });
+          return;
+        }
+        next();
+      })
+      .catch(next);
   };
 }
