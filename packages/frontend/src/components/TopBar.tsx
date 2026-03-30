@@ -35,7 +35,12 @@ export function TopBar({
     >
       {/* Logo + brand */}
       <div className="flex items-center gap-2 min-w-0">
-        <img src="/logo.png" alt="Lintic logo" className="h-5 w-auto opacity-90" />
+        <img
+          src="/logo.png"
+          alt="Lintic logo"
+          className="h-5 w-auto shrink-0"
+          style={{ filter: 'invert(1) brightness(4)', mixBlendMode: 'screen' }}
+        />
         <span
           className="text-sm font-semibold tracking-wide"
           style={{ fontFamily: 'Gabarito, sans-serif', color: '#cccccc' }}

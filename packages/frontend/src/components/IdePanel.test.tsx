@@ -13,6 +13,22 @@ vi.mock('@monaco-editor/react', () => ({
   ),
 }));
 
+// Mock WebContainer modules — we don't want real container boots in unit tests.
+vi.mock('../lib/webcontainer.js', () => ({
+  getWebContainer: vi.fn().mockResolvedValue({}),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+  readFile: vi.fn().mockResolvedValue(''),
+}));
+
+vi.mock('../lib/useWebContainer.js', () => ({
+  useWebContainer: () => ({ container: null, status: 'idle', error: null }),
+}));
+
+// Mock Terminal so xterm.js doesn't need a real DOM canvas.
+vi.mock('./Terminal.js', () => ({
+  Terminal: () => <div data-testid="terminal" />,
+}));
+
 function createFile(name: string) {
   fireEvent.click(screen.getByRole('button', { name: /new file/i }));
   const input = screen.getByPlaceholderText('filename.ts');
