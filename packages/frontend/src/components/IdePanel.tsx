@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FileTree } from './FileTree.js';
 import { TabBar } from './TabBar.js';
 import { MonacoEditor } from './MonacoEditor.js';
@@ -11,8 +11,6 @@ export function IdePanel() {
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const { wc } = useWebContainer();
-  const activeTabRef = useRef(activeTab);
-  activeTabRef.current = activeTab;
 
   function handleChange(value: string) {
     if (activeTab === null) return;
