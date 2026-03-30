@@ -15,20 +15,22 @@ export function TabBar({ tabs, activeTab, onTabSelect, onTabClose }: TabBarProps
         return (
           <div
             key={tab}
+            role="tab"
+            aria-selected={isActive}
+            tabIndex={0}
+            onClick={() => onTabSelect(tab)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                onTabSelect(tab);
+              }
+            }}
             className={`flex items-center gap-1 px-3 py-1.5 border-r border-gray-800 cursor-pointer text-xs shrink-0 group ${
               isActive
                 ? 'bg-gray-950 text-gray-100 border-t-2 border-t-blue-500'
                 : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
             }`}
           >
-            <button
-              role="tab"
-              aria-selected={isActive}
-              className="max-w-[120px] truncate"
-              onClick={() => onTabSelect(tab)}
-            >
-              {tab}
-            </button>
+            <span className="max-w-[120px] truncate">{tab}</span>
             <button
               aria-label={`Close ${tab}`}
               className="ml-1 opacity-0 group-hover:opacity-100 text-gray-500 hover:text-gray-200 transition-opacity"
