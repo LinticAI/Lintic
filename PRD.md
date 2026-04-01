@@ -267,13 +267,13 @@ For UI stories, also include:
 **Description:** As a reviewer, I need automated metrics computed from session data so I can evaluate candidates without manually reviewing every message.
 
 **Acceptance Criteria:**
-- [ ] Compute iteration efficiency: productive interactions / total interactions
-- [ ] Compute token efficiency: final code correctness score / total tokens consumed
-- [ ] Compute independence ratio: manually edited lines / total lines in final code
-- [ ] Compute recovery score: successful corrections / total agent errors encountered
-- [ ] All metrics return a 0-1 normalized score
-- [ ] Unit tests for each metric computation
-- [ ] Typecheck passes
+- [x] Compute iteration efficiency: productive interactions / total interactions
+- [x] Compute token efficiency: final code correctness score / total tokens consumed
+- [x] Compute independence ratio: manually edited lines / total lines in final code
+- [x] Compute recovery score: successful corrections / total agent errors encountered
+- [x] All metrics return a 0-1 normalized score
+- [x] Unit tests for each metric computation
+- [x] Typecheck passes
 
 ### US-016: Review dashboard with session replay
 
