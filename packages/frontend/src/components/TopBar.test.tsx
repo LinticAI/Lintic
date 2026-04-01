@@ -7,6 +7,8 @@ const DEFAULT_PROPS = {
   interactionsRemaining: 25,
   maxTokens: 50000,
   maxInteractions: 30,
+  isDark: false,
+  onToggleTheme: () => {},
 };
 
 describe('TopBar', () => {

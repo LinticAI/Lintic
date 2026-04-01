@@ -11,6 +11,7 @@ vi.mock('@monaco-editor/react', () => ({
       onChange={(e) => onChange?.(e.target.value)}
     />
   ),
+  loader: { init: () => Promise.resolve({ editor: { defineTheme: () => {} } }) },
 }));
 
 const { mockWriteFile, mockReadFile, mockStopWatch, getCapturedWatchListener, setCapturedWatchListener } =
@@ -46,7 +47,7 @@ vi.mock('../hooks/useWebContainer.js', () => ({
 
 // Mock Terminal so xterm.js doesn't need a real DOM canvas.
 vi.mock('./Terminal.js', () => ({
-  Terminal: () => <div data-testid="terminal" />,
+  Terminal: vi.fn().mockImplementation(() => <div data-testid="terminal" />),
 }));
 
 beforeEach(() => {

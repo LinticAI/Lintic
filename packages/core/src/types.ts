@@ -106,7 +106,7 @@ export interface AgentCapabilities {
 
 export interface AgentAdapter {
   init(config: AgentConfig): Promise<void>;
-  sendMessage(msg: string, context: SessionContext): Promise<AgentResponse>;
+  sendMessage(msg: string | null, context: SessionContext): Promise<AgentResponse>;
   getTokenUsage(): TokenUsage;
   getCapabilities(): AgentCapabilities;
   getTools(): ToolDefinition[];

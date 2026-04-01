@@ -1,0 +1,19 @@
+agent:
+  provider: openai-compatible
+  api_key: placeholder
+  model: gpt-4o
+
+constraints:
+  max_session_tokens: 50000
+  max_message_tokens: 4000
+  context_window: 32000
+  max_interactions: 30
+  time_limit_minutes: 60
+
+prompts:
+  - id: dev
+    title: Dev Testing Session
+  - id: library-api
+    title: Library Catalog API
+    difficulty: medium
+    tags: [backend, api-design]

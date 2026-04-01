@@ -14,7 +14,7 @@ export function TabBar({ tabs, activeTab, onTabSelect, onTabClose }: TabBarProps
     <div
       className="flex items-stretch overflow-x-auto shrink-0"
       role="tablist"
-      style={{ background: '#0e0e0e', height: '34px' }}
+      style={{ background: 'var(--color-bg-sidebar)', height: '34px' }}
     >
       <AnimatePresence initial={false}>
         {tabs.map((tab) => {
@@ -35,10 +35,12 @@ export function TabBar({ tabs, activeTab, onTabSelect, onTabClose }: TabBarProps
               }}
               className="flex items-center gap-1.5 px-3 cursor-pointer text-xs shrink-0 group overflow-hidden"
               style={{
-                background: isActive ? '#0c0c0c' : 'transparent',
-                color: isActive ? '#aaaaaa' : '#333333',
-                borderRight: '1px solid #111111',
-                borderTop: isActive ? '1px solid #1a4a7a' : '1px solid transparent',
+                background: isActive ? 'var(--color-bg-code)' : 'transparent',
+                color: isActive ? 'var(--color-text-main)' : 'var(--color-text-muted)',
+                borderRight: '1px solid var(--color-border-main)',
+                borderTop: isActive ? '2px solid var(--color-brand-orange)' : '2px solid transparent',
+                borderTopLeftRadius: isActive ? 'var(--radius-md)' : '0',
+                borderTopRightRadius: isActive ? 'var(--radius-md)' : '0',
                 minWidth: '80px',
                 maxWidth: '160px',
               }}

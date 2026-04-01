@@ -146,7 +146,7 @@ class FakeAdapter implements AgentAdapter {
     return Promise.resolve();
   }
 
-  sendMessage(_msg: string, _ctx: SessionContext): Promise<AgentResponse> {
+  sendMessage(_msg: string | null, _ctx: SessionContext): Promise<AgentResponse> {
     return Promise.resolve({
       content: 'Hello from the agent!',
       usage: this.lastUsage,
@@ -468,6 +468,172 @@ describe('POST /api/sessions/:id/close', () => {
       .post('/api/sessions/ghost/close')
       .set('Authorization', 'Bearer tok');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/sessions/:id/tool-results', () => {
+  test('returns 401 without auth', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .send({ tool_results: [] });
+    expect(res.status).toBe(401);
+  });
+
+  test('returns 400 when tool_results is missing', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 404 for unknown session', async () => {
+    const db = new FakeDb();
+    db.sessions.set('ghost', { ...makeSession({ id: 'ghost' }), token: 'tok' });
+    db.getSession = (): Promise<Session | null> => Promise.resolve(null);
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app)
+      .post('/api/sessions/ghost/tool-results')
+      .set('Authorization', 'Bearer tok')
+      .send({ tool_results: [] });
+    expect(res.status).toBe(404);
+  });
+
+  test('returns 409 when session is not active', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+    await db.closeSession(id);
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tool_results: [] });
+    expect(res.status).toBe(409);
+  });
+
+  test('returns 200 with agent response', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    const toolResults = [{ tool_call_id: 'tc-1', name: 'read_file' as const, output: 'const x = 1;', is_error: false }];
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tool_results: toolResults });
+
+    expect(res.status).toBe(200);
+    const body = res.body as { content: string; stop_reason: string };
+    expect(body.content).toBe('Hello from the agent!');
+    expect(body.stop_reason).toBe('end_turn');
+  });
+
+  test('stores tool results and assistant message in db', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    const toolResults = [{ tool_call_id: 'tc-1', name: 'read_file' as const, output: 'contents', is_error: false }];
+    await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tool_results: toolResults });
+
+    const msgs = await db.getMessages(id);
+    expect(msgs.some((m) => m.role === 'tool')).toBe(true);
+    expect(msgs.some((m) => m.role === 'assistant')).toBe(true);
+  });
+
+  test('does NOT increment interactions_used', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    const toolResults = [{ tool_call_id: 'tc-1', name: 'read_file' as const, output: 'contents', is_error: false }];
+    await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tool_results: toolResults });
+
+    const session = await db.getSession(id);
+    expect(session?.interactions_used).toBe(0);
+  });
+
+  test('returns 502 when adapter throws', async () => {
+    const db = new FakeDb();
+    const errAdapter = new FakeAdapter();
+    errAdapter.sendMessage = (): Promise<AgentResponse> => { throw new Error('LLM down'); };
+    const app = createApp(db, errAdapter, TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tool_results: [{ tool_call_id: 'tc-1', name: 'read_file' as const, output: 'x', is_error: false }] });
+    expect(res.status).toBe(502);
+  });
+
+  test('includes constraints_remaining in response', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tool_results: [{ tool_call_id: 'tc-1', name: 'read_file' as const, output: 'x', is_error: false }] });
+
+    const body = res.body as { constraints_remaining: { interactions_remaining: number } };
+    expect(typeof body.constraints_remaining.interactions_remaining).toBe('number');
+  });
+});
+
+describe('buildHistory (via POST messages + tool-results round-trip)', () => {
+  test('reconstruction: tool_use assistant message is deserialized from db', async () => {
+    const db = new FakeDb();
+    // Adapter returns tool_use on first call, end_turn on second
+    let callCount = 0;
+    const roundTripAdapter = new FakeAdapter();
+    roundTripAdapter.sendMessage = (): Promise<AgentResponse> => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve({
+          content: null,
+          tool_calls: [{ id: 'tc-1', name: 'read_file' as const, input: { path: '/a.ts' } }],
+          usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+          stop_reason: 'tool_use',
+        });
+      }
+      return Promise.resolve({
+        content: 'Done reading the file.',
+        usage: { prompt_tokens: 15, completion_tokens: 10, total_tokens: 25 },
+        stop_reason: 'end_turn',
+      });
+    };
+    const app = createApp(db, roundTripAdapter, TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    // First turn: send message
+    await request(app)
+      .post(`/api/sessions/${id}/messages`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'Read a file' });
+
+    // Second turn: send tool results
+    const toolRes = await request(app)
+      .post(`/api/sessions/${id}/tool-results`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tool_results: [{ tool_call_id: 'tc-1', name: 'read_file' as const, output: 'const x = 1;', is_error: false }] });
+
+    expect(toolRes.status).toBe(200);
+    const body = toolRes.body as { content: string };
+    expect(body.content).toBe('Done reading the file.');
   });
 });
 

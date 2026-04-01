@@ -72,19 +72,18 @@ export class AnthropicAdapter implements AgentAdapter {
     return Promise.resolve();
   }
 
-  async sendMessage(msg: string, context: SessionContext): Promise<AgentResponse> {
+  async sendMessage(msg: string | null, context: SessionContext): Promise<AgentResponse> {
     if (!this.config) {
       throw new AdapterError('AnthropicAdapter: call init() before sendMessage()', 0, 'not_initialized');
     }
 
-    const messages: AnthropicMessage[] = [
-      ...context.history.map(toAnthropicMessage),
-      { role: 'user', content: msg },
-    ];
+    const messages: AnthropicMessage[] = [...context.history.map(toAnthropicMessage)];
+    if (msg !== null) messages.push({ role: 'user', content: msg });
 
+    const MAX_OUTPUT_TOKENS = 4096;
     const requestBody = {
       model: this.config.model,
-      max_tokens: context.constraints_remaining.tokens_remaining,
+      max_tokens: Math.min(context.constraints_remaining.tokens_remaining, MAX_OUTPUT_TOKENS),
       messages,
       tools: toAnthropicTools(TOOLS),
     };

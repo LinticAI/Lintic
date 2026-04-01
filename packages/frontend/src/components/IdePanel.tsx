@@ -1,12 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FileTree } from './FileTree.js';
 import { TabBar } from './TabBar.js';
 import { MonacoEditor } from './MonacoEditor.js';
 import { Terminal } from './Terminal.js';
+import type { TerminalHandle } from './Terminal.js';
 import { useWebContainer } from '../hooks/useWebContainer.js';
 import { writeFile, readFile, watchFiles } from '../lib/webcontainer.js';
 
-export function IdePanel() {
+interface IdePanelProps {
+  terminalRef?: React.RefObject<TerminalHandle>;
+}
+
+export function IdePanel({ terminalRef }: IdePanelProps) {
+  const internalRef = useRef<TerminalHandle>(null);
+  const resolvedRef = terminalRef ?? internalRef;
   const [files, setFiles] = useState<Record<string, string>>({});
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -23,7 +30,7 @@ export function IdePanel() {
     let stopWatch: (() => void) | undefined;
     void watchFiles('/', async (_event, filename) => {
       const name = filename instanceof Uint8Array ? new TextDecoder().decode(filename) : filename;
-      if (!name || name.startsWith('node_modules')) return;
+      if (!name || name.split('/').some((seg) => ['node_modules', '.git', '.DS_Store'].includes(seg))) return;
       try {
         const content = await readFile(name);
         setFiles((prev) => ({ ...prev, [name]: content }));
@@ -76,7 +83,7 @@ export function IdePanel() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden bg-transparent">
       <div className="flex flex-1 overflow-hidden min-h-0">
         <FileTree
           files={files}
@@ -102,7 +109,7 @@ export function IdePanel() {
             ) : (
               <div
                 className="h-full flex flex-col items-center justify-center gap-2"
-                style={{ background: '#0c0c0c', color: '#2a2a2a' }}
+                style={{ background: 'var(--color-bg-code)', color: 'var(--color-text-dimmest)' }}
               >
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.75" opacity={0.4}>
                   <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
@@ -116,11 +123,12 @@ export function IdePanel() {
             style={{
               height: 200,
               flexShrink: 0,
-              borderTop: '1px solid #1e1e1e',
+              borderTop: '1px solid var(--color-border-main)',
               overflow: 'hidden',
+              background: 'var(--color-bg-ui)',
             }}
           >
-            <Terminal wc={wc} />
+            <Terminal wc={wc} ref={resolvedRef} />
           </div>
         </div>
       </div>

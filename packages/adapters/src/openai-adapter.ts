@@ -88,7 +88,7 @@ export class OpenAIAdapter implements AgentAdapter {
     return Promise.resolve();
   }
 
-  async sendMessage(msg: string, context: SessionContext): Promise<AgentResponse> {
+  async sendMessage(msg: string | null, context: SessionContext): Promise<AgentResponse> {
     if (!this.config) {
       throw new AdapterError(
         'OpenAIAdapter: call init() before sendMessage()',
@@ -97,16 +97,18 @@ export class OpenAIAdapter implements AgentAdapter {
       );
     }
 
-    const messages: OpenAIChatMessage[] = [
-      ...context.history.map(toOpenAIMessage),
-      { role: 'user', content: msg },
-    ];
+    const messages: OpenAIChatMessage[] = [...context.history.map(toOpenAIMessage)];
+    if (msg !== null) messages.push({ role: 'user', content: msg });
 
+    // max_tokens caps *output* tokens for this single call.
+    // tokens_remaining is the session budget (input + output combined), so cap it
+    // at a per-call maximum to avoid exceeding model output limits.
+    const MAX_OUTPUT_TOKENS = 4096;
     const requestBody = {
       model: this.config.model,
       messages,
       tools: toOpenAITools(TOOLS),
-      max_tokens: context.constraints_remaining.tokens_remaining,
+      max_tokens: Math.min(context.constraints_remaining.tokens_remaining, MAX_OUTPUT_TOKENS),
     };
 
     let response: Response;

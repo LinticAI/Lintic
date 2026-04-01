@@ -1,1 +1,126 @@
 @import "tailwindcss";
+
+@theme {
+  /* Core Palette from AgentAssess */
+  --color-brand-orange: #E8622A;
+  --color-brand-orange-light: #F28B5E;
+  --color-brand-orange-pale: #FFF0E8;
+  --color-brand-sky: #4A9EE8;
+  --color-brand-sky-light: #7FBDF0;
+  --color-brand-sky-pale: #EAF3FD;
+  
+  /* Main Backgrounds - Light (Default) */
+  --color-bg-code: #FFFFFF;
+  --color-bg-ui: #FFFBF7;
+  
+  /* Background Mapping */
+  --color-bg-app: #F0EBE5;
+  --color-bg-panel: #F5F0EB;
+  --color-bg-sidebar: #F5F0EB;
+  --color-bg-tab: #F5F0EB;
+  --color-bg-active-node: #FFFAF5;
+  --color-bg-hover-node: #FFF7F0;
+  --color-bg-input: #FFFFFF;
+  --color-bg-user-msg: var(--color-brand-sky-pale);
+  --color-bg-agent-msg: #FFFFFF;
+  --color-bg-bar-empty: #F5F0EB;
+  --color-bg-error: #FFF0F0;
+  --color-bg-stop-btn: #FFEBEB;
+  --color-bg-send-btn: var(--color-brand-orange);
+  --color-bg-tool-header: #F9F7F5;
+  --color-bg-tool-body: #FFFFFF;
+  --color-bg-tool-error: #FFF5F5;
+
+  /* Borders */
+  --color-border-main: rgba(0, 0, 0, 0.08);
+  --color-border-muted: rgba(0, 0, 0, 0.04);
+  --color-border-accent: var(--color-brand-orange);
+  --color-border-tool: rgba(0, 0, 0, 0.06);
+  --color-border-tool-error: rgba(232, 116, 97, 0.2);
+
+  /* Text & Icons */
+  --color-text-main: #1A1520;
+  --color-text-bold: #000000;
+  --color-text-muted: #6B6375;
+  --color-text-dim: #9B93A3;
+  --color-text-dimmer: #B0A9B8;
+  --color-text-dimmest: #CBC5D1;
+  --color-text-user-msg: #1A1520;
+  --color-text-agent-msg: #1A1520;
+  --color-text-tool-name: var(--color-brand-sky);
+  --color-text-tool-output: #444444;
+  
+  /* Status Colors */
+  --color-status-success: #2D8A2D;
+  --color-status-warning: #E8A832;
+  --color-status-error: #E87461;
+  --color-status-error-text: #D64545;
+  --color-status-diff-add: #2D8A2D;
+
+  /* Icon Colors */
+  --color-icon-file: #6B6375;
+  --color-icon-folder-open: #E8A832;
+  --color-icon-folder-closed: #C8A44A;
+
+  /* Border Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
+
+/* Dark Mode Overrides */
+@custom-variant dark (&:where(.dark, .dark *));
+
+.dark {
+  /* Main Backgrounds - Dark */
+  --color-bg-code: #0a0a0a;
+  --color-bg-ui: #141414;
+
+  /* Background Mapping */
+  --color-bg-app: #050505;
+  --color-bg-panel: var(--color-bg-ui);
+  --color-bg-sidebar: var(--color-bg-ui);
+  --color-bg-tab: #1a1a1a;
+  --color-bg-active-node: #242424;
+  --color-bg-hover-node: #202020;
+  --color-bg-input: #1a1a1a;
+  --color-bg-user-msg: #1e2a3a;
+  --color-bg-agent-msg: #1a1a1a;
+  --color-bg-bar-empty: #222222;
+  --color-bg-error: #2a1a1a;
+  --color-bg-stop-btn: #2a1212;
+  --color-bg-send-btn: #162a4a;
+  --color-bg-tool-header: #1a1a1a;
+  --color-bg-tool-body: #0c0c0c;
+  --color-bg-tool-error: #201212;
+
+  /* Borders */
+  --color-border-main: rgba(255, 255, 255, 0.1);
+  --color-border-muted: rgba(255, 255, 255, 0.05);
+  --color-border-accent: var(--color-brand-orange);
+  --color-border-tool: rgba(255, 255, 255, 0.1);
+  --color-border-tool-error: rgba(232, 116, 97, 0.3);
+
+  /* Text & Icons */
+  --color-text-main: #eeeeee;
+  --color-text-bold: #ffffff;
+  --color-text-muted: #888888;
+  --color-text-dim: #666666;
+  --color-text-dimmer: #555555;
+  --color-text-dimmest: #444444;
+  --color-text-user-msg: #eeeeee;
+  --color-text-agent-msg: #eeeeee;
+  --color-text-tool-name: var(--color-brand-sky-light);
+  --color-text-tool-output: #cccccc;
+
+  /* Status Colors */
+  --color-status-success: #3d8a3d;
+  --color-status-warning: #facc15;
+  --color-status-error: #fca5a5;
+  --color-status-error-text: #f87171;
+  --color-status-diff-add: #4ade80;
+
+  /* Icon Colors */
+  --color-icon-file: #888888;
+}
