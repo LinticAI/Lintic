@@ -25,18 +25,25 @@ vi.mock('highlight.js', () => ({
 
 vi.mock('highlight.js/styles/github-dark.css', () => ({}));
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── SSE helpers ──────────────────────────────────────────────────────────────
 
-/** Build a fake JSON Response from an object. */
-function makeJsonResponse(body: object): Response {
-  return {
-    ok: true,
-    json: async () => body,
-  } as unknown as Response;
+/** Build a fake SSE Response whose body streams the given events. */
+function makeSSEResponse(events: Array<{ event: string; data: unknown }>): Response {
+  const sseText = events
+    .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    .join('');
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(sseText));
+      controller.close();
+    },
+  });
+  return { ok: true, body: stream } as unknown as Response;
 }
 
-/** Standard agent response (end_turn). */
-function agentResponse(
+/** Build the payload for a `done` SSE event (text response, no tools). */
+function sseAgentDone(
   content: string,
   tokensRemaining = 49000,
   interactionsRemaining = 29,
@@ -44,7 +51,7 @@ function agentResponse(
   return {
     content,
     stop_reason: 'end_turn',
-    tool_calls: [],
+    tool_actions: [],
     usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
     constraints_remaining: {
       tokens_remaining: tokensRemaining,
@@ -54,25 +61,16 @@ function agentResponse(
   };
 }
 
-/** Agent response with tool_use stop reason. */
-function toolUseResponse(toolCalls: LocalToolCall[], tokensRemaining = 49000) {
-  return {
-    content: null,
-    stop_reason: 'tool_use',
-    tool_calls: toolCalls,
-    usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
-    constraints_remaining: {
-      tokens_remaining: tokensRemaining,
-      interactions_remaining: 29,
-      seconds_remaining: 3500,
-    },
-  };
-}
-
 /** Standard empty-history GET response. */
 const historyResponse: Response = {
   ok: true,
   json: async () => ({ messages: [] }),
+} as unknown as Response;
+
+/** Simple ok response for fire-and-forget tool-results POST calls. */
+const okResponse: Response = {
+  ok: true,
+  json: async () => ({ ok: true }),
 } as unknown as Response;
 
 const defaultConstraints = {
@@ -127,18 +125,14 @@ describe('ChatPanel', () => {
   });
 
   test('sends a message and shows agent response', async () => {
-    vi.mocked(fetch).mockImplementation((_url: RequestInfo | URL, init?: RequestInit) => {
-      if (!init?.method || init.method.toUpperCase() !== 'POST') {
-        return Promise.resolve(historyResponse);
-      }
-      return Promise.resolve(makeJsonResponse(agentResponse('Hello from agent')));
-    });
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(historyResponse)
+      .mockResolvedValueOnce(makeSSEResponse([{ event: 'done', data: sseAgentDone('Hello from agent') }]));
 
     render(<ChatPanel sessionId="s1" constraints={defaultConstraints} />);
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
 
-    const input = screen.getByTestId('chat-input');
-    fireEvent.change(input, { target: { value: 'Hello agent' } });
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'Hello agent' } });
     fireEvent.click(screen.getByTestId('chat-send'));
 
     await waitFor(() => expect(screen.getByText('You')).toBeInTheDocument());
@@ -148,7 +142,7 @@ describe('ChatPanel', () => {
   test('sends message on Enter keydown', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
-      .mockResolvedValueOnce(makeJsonResponse(agentResponse('ok')));
+      .mockResolvedValueOnce(makeSSEResponse([{ event: 'done', data: sseAgentDone('ok') }]));
 
     render(<ChatPanel sessionId="s1" constraints={defaultConstraints} />);
     const input = screen.getByTestId('chat-input');
@@ -185,11 +179,27 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(screen.getByText('Token budget exceeded')).toBeInTheDocument());
   });
 
-  test('calls onConstraintsUpdate when backend returns remaining', async () => {
+  test('shows error message when SSE error event is received', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(historyResponse)
+      .mockResolvedValueOnce(
+        makeSSEResponse([{ event: 'error', data: { error: 'Session constraints exhausted' } }]),
+      );
+
+    render(<ChatPanel sessionId="s1" constraints={defaultConstraints} />);
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() =>
+      expect(screen.getByText('Session constraints exhausted')).toBeInTheDocument(),
+    );
+  });
+
+  test('calls onConstraintsUpdate when done event arrives', async () => {
     const onUpdate = vi.fn();
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
-      .mockResolvedValueOnce(makeJsonResponse(agentResponse('hi', 49000, 29)));
+      .mockResolvedValueOnce(makeSSEResponse([{ event: 'done', data: sseAgentDone('hi', 49000, 29) }]));
 
     render(
       <ChatPanel
@@ -232,7 +242,7 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(screen.getByTestId('loading-spinner')).toBeInTheDocument());
 
     await act(async () => {
-      resolvePost(makeJsonResponse(agentResponse('done')));
+      resolvePost(makeSSEResponse([{ event: 'done', data: sseAgentDone('done') }]));
     });
 
     await waitFor(() => expect(screen.queryByTestId('loading-spinner')).not.toBeInTheDocument());
@@ -241,7 +251,7 @@ describe('ChatPanel', () => {
   test('renders agent response as HTML (markdown)', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
-      .mockResolvedValueOnce(makeJsonResponse(agentResponse('**bold text**')));
+      .mockResolvedValueOnce(makeSSEResponse([{ event: 'done', data: sseAgentDone('**bold text**') }]));
 
     render(<ChatPanel sessionId="s1" constraints={defaultConstraints} />);
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
@@ -273,11 +283,11 @@ describe('ChatPanel', () => {
     fireEvent.click(screen.getByTestId('chat-send'));
 
     await waitFor(() => expect(screen.getByTestId('stop-button')).toBeInTheDocument());
-    // Send button is hidden while loading
     expect(screen.queryByTestId('chat-send')).not.toBeInTheDocument();
 
-    // Clean up
-    await act(async () => { resolvePost(makeJsonResponse(agentResponse('done'))); });
+    await act(async () => {
+      resolvePost(makeSSEResponse([{ event: 'done', data: sseAgentDone('done') }]));
+    });
   });
 
   test('clicking Stop clears the spinner and hides Stop button', async () => {
@@ -308,9 +318,9 @@ describe('ChatPanel', () => {
     });
   });
 
-  // ── Tool action round-trip ───────────────────────────────────────────────────
+  // ── Tool action streaming ────────────────────────────────────────────────────
 
-  test('renders tool action cards when done response contains tool_actions', async () => {
+  test('shows pending tool card immediately when tool_calls event arrives', async () => {
     const toolCalls: LocalToolCall[] = [
       { id: 'tc-1', name: 'read_file', input: { path: '/app/index.ts' } },
     ];
@@ -318,14 +328,60 @@ describe('ChatPanel', () => {
       { tool_call_id: 'tc-1', name: 'read_file', output: 'hello', is_error: false },
     ];
 
-    const onExecuteTools = vi.fn().mockResolvedValueOnce(toolResults);
+    let resolveTools!: (r: LocalToolResult[]) => void;
+    const toolsPromise = new Promise<LocalToolResult[]>((r) => { resolveTools = r; });
+    const onExecuteTools = vi.fn().mockReturnValue(toolsPromise);
 
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
-      // First POST /messages → tool_use
-      .mockResolvedValueOnce(makeJsonResponse(toolUseResponse(toolCalls)))
-      // POST /tool-results → end_turn
-      .mockResolvedValueOnce(makeJsonResponse(agentResponse('I read the file')));
+      .mockResolvedValueOnce(
+        makeSSEResponse([
+          { event: 'tool_calls', data: { request_id: 'req-1', tool_calls: toolCalls } },
+          { event: 'done', data: sseAgentDone('I read the file') },
+        ]),
+      )
+      .mockResolvedValue(okResponse); // tool-results POST
+
+    render(
+      <ChatPanel
+        sessionId="s1"
+        constraints={defaultConstraints}
+        onExecuteTools={onExecuteTools}
+      />,
+    );
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'read a file' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    // Pending card appears before tools finish executing
+    await waitFor(() => expect(screen.getByTestId('tool-action-card')).toBeInTheDocument());
+
+    // Resolve tools — card updates and final message appears
+    await act(async () => { resolveTools(toolResults); });
+
+    await waitFor(() => expect(screen.getByTestId('agent-message')).toBeInTheDocument());
+  });
+
+  test('renders tool action card with results after tools execute', async () => {
+    const toolCalls: LocalToolCall[] = [
+      { id: 'tc-1', name: 'read_file', input: { path: '/app/index.ts' } },
+    ];
+    const toolResults: LocalToolResult[] = [
+      { tool_call_id: 'tc-1', name: 'read_file', output: 'hello', is_error: false },
+    ];
+
+    const onExecuteTools = vi.fn().mockResolvedValue(toolResults);
+
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(historyResponse)
+      .mockResolvedValueOnce(
+        makeSSEResponse([
+          { event: 'tool_calls', data: { request_id: 'req-1', tool_calls: toolCalls } },
+          { event: 'done', data: sseAgentDone('I read the file') },
+        ]),
+      )
+      .mockResolvedValue(okResponse);
 
     render(
       <ChatPanel
@@ -345,7 +401,7 @@ describe('ChatPanel', () => {
     });
   });
 
-  test('calls onExecuteTools with tool_calls from tool_use response', async () => {
+  test('calls onExecuteTools with tool_calls from tool_calls event', async () => {
     const toolCalls: LocalToolCall[] = [
       { id: 'tc-1', name: 'run_command', input: { command: 'npm test' } },
     ];
@@ -353,12 +409,17 @@ describe('ChatPanel', () => {
       { tool_call_id: 'tc-1', name: 'run_command', output: 'PASS', is_error: false },
     ];
 
-    const onExecuteTools = vi.fn().mockResolvedValueOnce(toolResults);
+    const onExecuteTools = vi.fn().mockResolvedValue(toolResults);
 
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
-      .mockResolvedValueOnce(makeJsonResponse(toolUseResponse(toolCalls)))
-      .mockResolvedValueOnce(makeJsonResponse(agentResponse('Tests passed')));
+      .mockResolvedValueOnce(
+        makeSSEResponse([
+          { event: 'tool_calls', data: { request_id: 'req-1', tool_calls: toolCalls } },
+          { event: 'done', data: sseAgentDone('Tests passed') },
+        ]),
+      )
+      .mockResolvedValue(okResponse);
 
     render(
       <ChatPanel
@@ -376,11 +437,10 @@ describe('ChatPanel', () => {
       expect(onExecuteTools).toHaveBeenCalledWith(toolCalls);
     });
 
-    // Final agent message also rendered
     await waitFor(() => expect(screen.getByTestId('agent-message')).toBeInTheDocument());
   });
 
-  test('posts tool_results to /tool-results endpoint', async () => {
+  test('posts tool results to /tool-results/:requestId endpoint', async () => {
     const toolCalls: LocalToolCall[] = [
       { id: 'tc-1', name: 'write_file', input: { path: '/a.ts', content: 'hello' } },
     ];
@@ -388,12 +448,17 @@ describe('ChatPanel', () => {
       { tool_call_id: 'tc-1', name: 'write_file', output: 'ok', is_error: false },
     ];
 
-    const onExecuteTools = vi.fn().mockResolvedValueOnce(toolResults);
+    const onExecuteTools = vi.fn().mockResolvedValue(toolResults);
 
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
-      .mockResolvedValueOnce(makeJsonResponse(toolUseResponse(toolCalls)))
-      .mockResolvedValueOnce(makeJsonResponse(agentResponse('Written')));
+      .mockResolvedValueOnce(
+        makeSSEResponse([
+          { event: 'tool_calls', data: { request_id: 'req-abc', tool_calls: toolCalls } },
+          { event: 'done', data: sseAgentDone('Written') },
+        ]),
+      )
+      .mockResolvedValue(okResponse);
 
     render(
       <ChatPanel
@@ -407,22 +472,27 @@ describe('ChatPanel', () => {
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'write a file' } });
     fireEvent.click(screen.getByTestId('chat-send'));
 
+    // Wait for the tool-results POST (fire-and-forget, happens after tools execute)
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3));
 
-    // Third fetch call should be POST to /tool-results
     const [url] = vi.mocked(fetch).mock.calls[2]!;
-    expect(String(url)).toContain('tool-results');
+    expect(String(url)).toContain('tool-results/req-abc');
   });
 
-  test('uses stub tool results when onExecuteTools is not provided', async () => {
+  test('uses stub error results when onExecuteTools is not provided', async () => {
     const toolCalls: LocalToolCall[] = [
       { id: 'tc-1', name: 'read_file', input: { path: '/x.ts' } },
     ];
 
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
-      .mockResolvedValueOnce(makeJsonResponse(toolUseResponse(toolCalls)))
-      .mockResolvedValueOnce(makeJsonResponse(agentResponse('Done')));
+      .mockResolvedValueOnce(
+        makeSSEResponse([
+          { event: 'tool_calls', data: { request_id: 'req-1', tool_calls: toolCalls } },
+          { event: 'done', data: sseAgentDone('Done') },
+        ]),
+      )
+      .mockResolvedValue(okResponse);
 
     render(<ChatPanel sessionId="s1" constraints={defaultConstraints} />);
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
@@ -430,15 +500,13 @@ describe('ChatPanel', () => {
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hi' } });
     fireEvent.click(screen.getByTestId('chat-send'));
 
-    // Should still proceed — stub errors sent as tool results
-    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(screen.getByTestId('agent-message')).toBeInTheDocument());
   });
 
   test('forwards agentConfig to backend in request body', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
-      .mockResolvedValueOnce(makeJsonResponse(agentResponse('ok')));
+      .mockResolvedValueOnce(makeSSEResponse([{ event: 'done', data: sseAgentDone('ok') }]));
 
     const agentConfig = { provider: 'openai-compatible', api_key: 'sk-test', model: 'gpt-4o' };
 
@@ -455,7 +523,8 @@ describe('ChatPanel', () => {
     fireEvent.click(screen.getByTestId('chat-send'));
 
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2));
-    const [, init] = vi.mocked(fetch).mock.calls[1]!;
+    const [url, init] = vi.mocked(fetch).mock.calls[1]!;
+    expect(String(url)).toContain('messages/stream');
     const body = JSON.parse(init?.body as string) as { agent_config?: unknown };
     expect(body.agent_config).toEqual(agentConfig);
   });

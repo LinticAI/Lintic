@@ -30,12 +30,47 @@ export interface AgentConfig {
   base_url?: string;
 }
 
-interface SingleCallResponse {
+interface SSEDonePayload {
   content: string | null;
   stop_reason: string;
-  tool_calls?: LocalToolCall[];
+  tool_actions: Array<{ tool_calls: LocalToolCall[]; tool_results: LocalToolResult[] }>;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   constraints_remaining: { tokens_remaining: number; interactions_remaining: number; seconds_remaining: number };
+}
+
+interface SSEToolCallsPayload {
+  request_id: string;
+  tool_calls: LocalToolCall[];
+}
+
+/** Parse SSE events from a fetch ReadableStream. Yields { event, data } for each complete event block. */
+async function* readSSEStream(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<{ event: string; data: unknown }> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() ?? '';
+      for (const block of blocks) {
+        if (!block.trim()) continue;
+        let event = 'message';
+        let dataStr = '';
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event: ')) event = line.slice(7).trim();
+          else if (line.startsWith('data: ')) dataStr = line.slice(6);
+        }
+        if (dataStr) yield { event, data: JSON.parse(dataStr) as unknown };
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 interface ChatPanelProps {
@@ -54,7 +89,6 @@ interface ChatPanelProps {
   agentConfig?: AgentConfig;
 }
 
-const MAX_TOOL_LOOPS = 10;
 
 // Configure a custom renderer with highlight.js code highlighting.
 const renderer = new Renderer();
@@ -152,91 +186,81 @@ export function ChatPanel({
     const agentConfigBody = agentConfig ? { agent_config: agentConfig } : {};
 
     try {
-      // ── First call: POST the user message ──────────────────────────────────
-      const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages`, {
+      // ── Open SSE stream ────────────────────────────────────────────────────
+      const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages/stream`, {
         method: 'POST',
         headers: jsonHeaders,
         body: JSON.stringify({ message: text, ...agentConfigBody }),
         signal: ctrl.signal,
       });
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         const errBody = (await res.json()) as { error?: string };
         throw new Error(errBody.error ?? `HTTP ${res.status}`);
       }
 
-      let data = (await res.json()) as SingleCallResponse;
-      onConstraintsUpdate?.({
-        tokensRemaining: data.constraints_remaining.tokens_remaining,
-        interactionsRemaining: data.constraints_remaining.interactions_remaining,
-      });
+      // ── Process SSE events ─────────────────────────────────────────────────
+      for await (const { event, data } of readSSEStream(res.body)) {
+        if (event === 'tool_calls') {
+          const { request_id, tool_calls } = data as SSEToolCallsPayload;
 
-      // ── Round-trip tool loop ───────────────────────────────────────────────
-      let loopCount = 0;
-      while (
-        data.stop_reason === 'tool_use' &&
-        data.tool_calls?.length &&
-        loopCount < MAX_TOOL_LOOPS
-      ) {
-        loopCount++;
-        const toolCalls = data.tool_calls;
+          // Show pending card immediately (before tools run)
+          const msgId = generateId();
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: msgId,
+              role: 'assistant',
+              content: '',
+              tool_actions: [{ tool_calls, tool_results: [] }],
+              timestamp: Date.now(),
+            },
+          ]);
 
-        // Execute tools locally or return stub errors
-        let toolResults: LocalToolResult[];
-        if (onExecuteTools) {
-          toolResults = await onExecuteTools(toolCalls);
-        } else {
-          toolResults = toolCalls.map((c) => ({
-            tool_call_id: c.id,
-            name: c.name,
-            output: 'Tool execution not available',
-            is_error: true,
-          }));
+          // Execute tools locally (or stub if no executor)
+          const toolResults: LocalToolResult[] = onExecuteTools
+            ? await onExecuteTools(tool_calls)
+            : tool_calls.map((c) => ({
+                tool_call_id: c.id,
+                name: c.name,
+                output: 'Tool execution not available',
+                is_error: true,
+              }));
+
+          // Update card with results
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === msgId
+                ? { ...m, tool_actions: [{ tool_calls, tool_results: toolResults }] }
+                : m,
+            ),
+          );
+
+          // POST results to unblock the server loop — no need to await response
+          void fetch(`${apiBase}/api/sessions/${sessionId}/tool-results/${request_id}`, {
+            method: 'POST',
+            headers: jsonHeaders,
+            body: JSON.stringify({ tool_results: toolResults }),
+            signal: ctrl.signal,
+          });
+
+        } else if (event === 'done') {
+          const result = data as SSEDonePayload;
+          onConstraintsUpdate?.({
+            tokensRemaining: result.constraints_remaining.tokens_remaining,
+            interactionsRemaining: result.constraints_remaining.interactions_remaining,
+          });
+          if (result.content) {
+            setMessages((prev) => [
+              ...prev,
+              { id: generateId(), role: 'assistant', content: result.content!, timestamp: Date.now() },
+            ]);
+          }
+
+        } else if (event === 'error') {
+          const { error } = data as { error: string };
+          throw new Error(error);
         }
-
-        // Show tool action card immediately
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: generateId(),
-            role: 'assistant',
-            content: '',
-            tool_actions: [{ tool_calls: toolCalls, tool_results: toolResults }],
-            timestamp: Date.now(),
-          },
-        ]);
-
-        // POST tool results for continuation LLM call
-        const toolRes = await fetch(`${apiBase}/api/sessions/${sessionId}/tool-results`, {
-          method: 'POST',
-          headers: jsonHeaders,
-          body: JSON.stringify({ tool_results: toolResults, ...agentConfigBody }),
-          signal: ctrl.signal,
-        });
-
-        if (!toolRes.ok) {
-          const errBody = (await toolRes.json()) as { error?: string };
-          throw new Error(errBody.error ?? `HTTP ${toolRes.status}`);
-        }
-
-        data = (await toolRes.json()) as SingleCallResponse;
-        onConstraintsUpdate?.({
-          tokensRemaining: data.constraints_remaining.tokens_remaining,
-          interactionsRemaining: data.constraints_remaining.interactions_remaining,
-        });
-      }
-
-      // ── Final assistant message ────────────────────────────────────────────
-      if (data.content) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: generateId(),
-            role: 'assistant',
-            content: data.content!,
-            timestamp: Date.now(),
-          },
-        ]);
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {

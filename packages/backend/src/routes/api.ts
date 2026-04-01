@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import type { Request, Response, RequestHandler } from 'express';
+import { randomUUID } from 'node:crypto';
 import type { DatabaseAdapter, AgentAdapter, Config, Message, ConstraintsRemaining, SessionContext, ToolCall, ToolResult, AgentConfig, MessageRole } from '@lintic/core';
 import { OpenAIAdapter, AnthropicAdapter } from '@lintic/adapters';
 import type { StoredMessage } from '@lintic/core';
 import { requireToken } from '../middleware/auth.js';
+import { runAgentLoop } from '../agent-loop.js';
+import type { ToolRunner } from '../agent-loop.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -58,6 +61,20 @@ async function resolveAdapter(defaultAdapter: AgentAdapter, agentConfigBody: unk
     return createPerRequestAdapter(agentConfigBody);
   }
   return defaultAdapter;
+}
+
+// ─── Pending tool results for SSE agent loop ──────────────────────────────────
+
+/** Maps requestId → resolve function for the tool-results Promise. Times out after 5 minutes. */
+const pendingToolResults = new Map<string, (results: ToolResult[]) => void>();
+
+function registerPendingTools(requestId: string, resolve: (results: ToolResult[]) => void): void {
+  pendingToolResults.set(requestId, resolve);
+  setTimeout(() => {
+    if (pendingToolResults.delete(requestId)) {
+      resolve([]); // unblock the loop with empty results on timeout
+    }
+  }, 5 * 60 * 1000);
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -303,6 +320,137 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       constraints_remaining: updatedConstraints,
     });
   }));
+
+  // POST /api/sessions/:id/messages/stream — SSE agent loop (wires runAgentLoop server-side)
+  router.post('/sessions/:id/messages/stream', requireToken(db), (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const body = req.body as { message?: unknown; agent_config?: unknown };
+
+    if (typeof body.message !== 'string' || !body.message.trim()) {
+      res.status(400).json({ error: 'message is required and must be a non-empty string' });
+      return;
+    }
+    const message = body.message;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const sendEvent = (event: string, data: unknown): void => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    void (async () => {
+      try {
+        const session = await db.getSession(sessionId);
+        if (!session) { sendEvent('error', { error: 'Session not found' }); res.end(); return; }
+        if (session.status !== 'active') { sendEvent('error', { error: 'Session is not active' }); res.end(); return; }
+
+        const elapsed = (Date.now() - session.created_at) / 1000;
+        const timeLimitSeconds = session.constraint.time_limit_minutes * 60;
+        if (
+          session.tokens_used >= session.constraint.max_session_tokens ||
+          session.interactions_used >= session.constraint.max_interactions ||
+          elapsed >= timeLimitSeconds
+        ) { sendEvent('error', { error: 'Session constraints exhausted' }); res.end(); return; }
+
+        const storedMessages = await db.getMessages(sessionId);
+        const history = buildHistory(storedMessages);
+        const constraints_remaining: ConstraintsRemaining = {
+          tokens_remaining: Math.max(0, session.constraint.max_session_tokens - session.tokens_used),
+          interactions_remaining: Math.max(0, session.constraint.max_interactions - session.interactions_used),
+          seconds_remaining: Math.max(0, timeLimitSeconds - elapsed),
+        };
+        const context: SessionContext = { session_id: sessionId, history, constraints_remaining };
+        const reqAdapter = await resolveAdapter(adapter, body.agent_config);
+
+        const toolRunner: ToolRunner = (calls) => {
+          const requestId = randomUUID();
+          sendEvent('tool_calls', { request_id: requestId, tool_calls: calls });
+          return new Promise<ToolResult[]>((resolve) => registerPendingTools(requestId, resolve));
+        };
+
+        let loopResult;
+        try {
+          loopResult = await runAgentLoop(message, context, reqAdapter, toolRunner);
+        } catch (err) {
+          sendEvent('error', { error: err instanceof Error ? err.message : 'Agent loop error' });
+          res.end();
+          return;
+        }
+
+        // Persist user message
+        await db.addMessage(sessionId, 'user', message, 0);
+
+        // Persist each tool round-trip
+        for (const action of loopResult.tool_actions) {
+          const encoded = JSON.stringify({ __type: 'tool_use', content: null, tool_calls: action.tool_calls });
+          await db.addMessage(sessionId, 'assistant', encoded, 0);
+          await db.addMessage(sessionId, 'tool', JSON.stringify(action.tool_results), 0);
+        }
+
+        // Persist final assistant message
+        await db.addMessage(sessionId, 'assistant', loopResult.content ?? '', loopResult.total_usage.completion_tokens);
+
+        // 1 interaction for the full agent turn; all LLM calls' tokens aggregated
+        await db.updateSessionUsage(sessionId, loopResult.total_usage.total_tokens, 1);
+
+        // Record replay events
+        const now = Date.now();
+        await db.addReplayEvent(sessionId, 'message', now, { role: 'user', content: message });
+        for (const action of loopResult.tool_actions) {
+          await db.addReplayEvent(sessionId, 'tool_call', now, { tool_calls: action.tool_calls });
+          await db.addReplayEvent(sessionId, 'tool_result', now, { tool_results: action.tool_results });
+        }
+        await db.addReplayEvent(sessionId, 'agent_response', now, {
+          content: loopResult.content,
+          stop_reason: loopResult.stop_reason,
+          usage: loopResult.total_usage,
+        });
+        await db.addReplayEvent(sessionId, 'resource_usage', now, loopResult.total_usage);
+
+        const updatedConstraints: ConstraintsRemaining = {
+          tokens_remaining: Math.max(0, constraints_remaining.tokens_remaining - loopResult.total_usage.total_tokens),
+          interactions_remaining: Math.max(0, constraints_remaining.interactions_remaining - 1),
+          seconds_remaining: constraints_remaining.seconds_remaining,
+        };
+
+        sendEvent('done', {
+          content: loopResult.content,
+          stop_reason: loopResult.stop_reason,
+          tool_actions: loopResult.tool_actions,
+          usage: loopResult.total_usage,
+          constraints_remaining: updatedConstraints,
+        });
+      } catch (err) {
+        sendEvent('error', { error: err instanceof Error ? err.message : 'Unknown error' });
+      } finally {
+        res.end();
+      }
+    })();
+  });
+
+  // POST /api/sessions/:id/tool-results/:requestId — deliver WebContainer tool results to waiting SSE loop
+  router.post('/sessions/:id/tool-results/:requestId', requireToken(db), (req, res) => {
+    const requestId = req.params['requestId'] as string;
+    const body = req.body as { tool_results?: unknown };
+
+    if (!Array.isArray(body.tool_results)) {
+      res.status(400).json({ error: 'tool_results must be an array' });
+      return;
+    }
+
+    const resolver = pendingToolResults.get(requestId);
+    if (!resolver) {
+      res.status(404).json({ error: 'No pending tool request with that ID' });
+      return;
+    }
+
+    pendingToolResults.delete(requestId);
+    resolver(body.tool_results as ToolResult[]);
+    res.json({ ok: true });
+  });
 
   // GET /api/sessions/:id/messages — full conversation history
   router.get('/sessions/:id/messages', requireToken(db), asyncRoute(async (req, res) => {

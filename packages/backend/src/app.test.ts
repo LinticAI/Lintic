@@ -637,6 +637,175 @@ describe('buildHistory (via POST messages + tool-results round-trip)', () => {
   });
 });
 
+describe('POST /api/sessions/:id/messages/stream', () => {
+  test('returns 401 without auth', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+    const res = await request(app)
+      .post(`/api/sessions/${id}/messages/stream`)
+      .send({ message: 'Hello' });
+    expect(res.status).toBe(401);
+  });
+
+  test('returns 400 when message is missing', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+    const res = await request(app)
+      .post(`/api/sessions/${id}/messages/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  test('streams text/event-stream with done event containing agent content', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    const res = await request(app)
+      .post(`/api/sessions/${id}/messages/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'Hello' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/event-stream/);
+    expect(res.text).toContain('event: done');
+    expect(res.text).toContain('Hello from the agent!');
+  });
+
+  test('stores user and assistant messages after loop completes', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    await request(app)
+      .post(`/api/sessions/${id}/messages/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'Hello' });
+
+    const msgs = await db.getMessages(id);
+    expect(msgs.some((m) => m.role === 'user')).toBe(true);
+    expect(msgs.some((m) => m.role === 'assistant')).toBe(true);
+  });
+
+  test('updates session usage counters (1 interaction per agent turn)', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    await request(app)
+      .post(`/api/sessions/${id}/messages/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'Hello' });
+
+    const session = await db.getSession(id);
+    expect(session?.tokens_used).toBeGreaterThan(0);
+    expect(session?.interactions_used).toBe(1);
+  });
+
+  test('records replay events for message and agent_response', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    await request(app)
+      .post(`/api/sessions/${id}/messages/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'Hello' });
+
+    const events = await db.getReplayEvents(id);
+    expect(events.some((e) => e.type === 'message')).toBe(true);
+    expect(events.some((e) => e.type === 'agent_response')).toBe(true);
+    expect(events.some((e) => e.type === 'resource_usage')).toBe(true);
+  });
+
+  test('done event contains constraints_remaining with decremented interaction count', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+
+    const res = await request(app)
+      .post(`/api/sessions/${id}/messages/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'Hello' });
+
+    // Parse the done event payload from SSE text
+    const doneMatch = /event: done\ndata: (.+)/.exec(res.text);
+    expect(doneMatch).not.toBeNull();
+    const donePayload = JSON.parse(doneMatch![1]!) as { constraints_remaining: { interactions_remaining: number } };
+    expect(donePayload.constraints_remaining.interactions_remaining).toBe(BASE_CONSTRAINT.max_interactions - 1);
+  });
+
+  test('sends error event when session not found', async () => {
+    const db = new FakeDb();
+    db.sessions.set('ghost', { ...makeSession({ id: 'ghost' }), token: 'tok' });
+    const origGet = db.getSession.bind(db);
+    db.getSession = (id: string): Promise<Session | null> =>
+      id === 'ghost' ? Promise.resolve(null) : origGet(id);
+
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app)
+      .post('/api/sessions/ghost/messages/stream')
+      .set('Authorization', 'Bearer tok')
+      .send({ message: 'Hello' });
+
+    expect(res.status).toBe(200); // SSE headers already sent
+    expect(res.text).toContain('event: error');
+    expect(res.text).toContain('Session not found');
+  });
+
+  test('sends error event when constraints are exhausted', async () => {
+    const db = new FakeDb();
+    const exhausted: Constraint = { ...BASE_CONSTRAINT, max_interactions: 0 };
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: exhausted });
+
+    const res = await request(app)
+      .post(`/api/sessions/${id}/messages/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'Hello' });
+
+    expect(res.text).toContain('event: error');
+    expect(res.text).toContain('exhausted');
+  });
+});
+
+describe('POST /api/sessions/:id/tool-results/:requestId', () => {
+  test('returns 401 without auth', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results/some-request-id`)
+      .send({ tool_results: [] });
+    expect(res.status).toBe(401);
+  });
+
+  test('returns 400 when tool_results is missing', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results/some-id`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 404 when requestId has no pending loop', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    const { id, token } = await db.createSession({ prompt_id: 'p', candidate_email: 'e@e.com', constraint: BASE_CONSTRAINT });
+    const res = await request(app)
+      .post(`/api/sessions/${id}/tool-results/nonexistent-request-id`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tool_results: [{ tool_call_id: 'tc-1', name: 'read_file', output: 'x', is_error: false }] });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('auth middleware', () => {
   test('rejects requests with no Authorization header', async () => {
     const db = new FakeDb();
