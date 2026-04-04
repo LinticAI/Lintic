@@ -74,6 +74,10 @@ vi.mock('./components/AssessmentLinkLoader.js', () => ({
   AssessmentLinkLoader: () => <div data-testid="assessment-loader">Assessment</div>,
 }));
 
+vi.mock('./components/AdminLinksDashboard.js', () => ({
+  AdminLinksDashboard: () => <div data-testid="admin-links-dashboard">Admin Links</div>,
+}));
+
 vi.mock('./lib/useConstraintTimer.js', () => ({
   useConstraintTimer: () => [
     {
@@ -128,5 +132,13 @@ describe('App prompt display', () => {
       );
       expect(mockIdePanel).toHaveBeenLastCalledWith(expect.stringMatching(/^instructions\.md-/));
     });
+  });
+
+  test('renders the admin links dashboard on the admin route', () => {
+    window.history.replaceState({}, '', '/admin/links');
+
+    render(<App />);
+
+    expect(screen.getByTestId('admin-links-dashboard')).toBeInTheDocument();
   });
 });

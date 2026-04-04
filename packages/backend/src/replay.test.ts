@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import request from 'supertest';
 import type {
+  AssessmentLinkRecord,
   DatabaseAdapter,
   AgentAdapter,
   AgentConfig,
@@ -12,6 +13,7 @@ import type {
   Session,
   StoredMessage,
   StoredReplayEvent,
+  CreateAssessmentLinkConfig,
   CreateSessionConfig,
   MessageRole,
   ReplayEventType,
@@ -34,6 +36,7 @@ class FakeDb implements DatabaseAdapter {
   sessions = new Map<string, Session & { token: string }>();
   messageStore = new Map<string, StoredMessage[]>();
   replayStore = new Map<string, StoredReplayEvent[]>();
+  assessmentLinks = new Map<string, AssessmentLinkRecord>();
   nextMsgId = 1;
 
   createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
@@ -54,6 +57,21 @@ class FakeDb implements DatabaseAdapter {
     this.messageStore.set(id, []);
     this.replayStore.set(id, []);
     return Promise.resolve({ id, token });
+  }
+
+  createAssessmentLink(config: CreateAssessmentLinkConfig): Promise<AssessmentLinkRecord> {
+    const link: AssessmentLinkRecord = {
+      id: config.id,
+      token: config.token,
+      url: config.url,
+      prompt_id: config.prompt_id,
+      candidate_email: config.candidate_email,
+      created_at: config.created_at,
+      expires_at: config.expires_at,
+      constraint: config.constraint,
+    };
+    this.assessmentLinks.set(link.id, link);
+    return Promise.resolve(link);
   }
 
   getSession(id: string): Promise<Session | null> {
@@ -91,6 +109,16 @@ class FakeDb implements DatabaseAdapter {
     return Promise.resolve([...this.sessions.values()].filter((s) => s.prompt_id === promptId));
   }
 
+  listAssessmentLinks(): Promise<AssessmentLinkRecord[]> {
+    return Promise.resolve(
+      [...this.assessmentLinks.values()].sort((a, b) => b.created_at - a.created_at),
+    );
+  }
+
+  getAssessmentLink(id: string): Promise<AssessmentLinkRecord | null> {
+    return Promise.resolve(this.assessmentLinks.get(id) ?? null);
+  }
+
   validateSessionToken(id: string, token: string): Promise<boolean> {
     const session = this.sessions.get(id);
     return Promise.resolve(session?.token === token);
@@ -122,6 +150,14 @@ class FakeDb implements DatabaseAdapter {
   markAssessmentLinkUsed(linkId: string, _sessionId: string): Promise<boolean> {
     if (this.replayStore.has(`link:${linkId}`)) {
       return Promise.resolve(false);
+    }
+    const link = this.assessmentLinks.get(linkId);
+    if (link) {
+      this.assessmentLinks.set(linkId, {
+        ...link,
+        consumed_session_id: _sessionId,
+        consumed_at: Date.now(),
+      });
     }
     this.replayStore.set(`link:${linkId}`, [{ id: 0, session_id: _sessionId, type: 'message', timestamp: 0, payload: null }]);
     return Promise.resolve(true);

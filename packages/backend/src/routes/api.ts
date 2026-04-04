@@ -1,7 +1,25 @@
 import { Router } from 'express';
 import type { Request, Response, RequestHandler } from 'express';
 import { randomUUID } from 'node:crypto';
-import type { DatabaseAdapter, AgentAdapter, Config, Message, ConstraintsRemaining, SessionContext, ToolCall, ToolResult, AgentConfig, MessageRole, Constraint, PromptSummary, PromptConfig } from '@lintic/core';
+import type {
+  AdminAssessmentLinkDetail,
+  AdminAssessmentLinkSummary,
+  AssessmentLinkRecord,
+  AssessmentLinkStatus,
+  DatabaseAdapter,
+  AgentAdapter,
+  Config,
+  Message,
+  ConstraintsRemaining,
+  SessionContext,
+  ToolCall,
+  ToolResult,
+  AgentConfig,
+  MessageRole,
+  Constraint,
+  PromptSummary,
+  PromptConfig,
+} from '@lintic/core';
 import {
   buildAssessmentLink,
   computeSessionMetrics,
@@ -77,12 +95,14 @@ function mergeConstraints(base: Constraint, override?: Partial<Constraint>): Con
 }
 
 function buildBaseUrl(req: Request): string {
+  const origin = req.get('origin');
+  if (origin) {
+    return origin.replace(/\/$/, '');
+  }
+
   const protocol = req.protocol;
   const host = req.get('host') ?? 'localhost:3000';
-  if (host.includes('517')) {
-    return `${protocol}://${host}`;
-  }
-  return `${protocol}://${host.replace(/:3000$/, ':5173')}`;
+  return `${protocol}://${host}`;
 }
 
 function toPromptSummary(prompt: PromptConfig): PromptSummary {
@@ -92,6 +112,81 @@ function toPromptSummary(prompt: PromptConfig): PromptSummary {
     ...(prompt.description ? { description: prompt.description } : {}),
     ...(prompt.tags ? { tags: prompt.tags } : {}),
   };
+}
+
+async function resolveAssessmentLinkStatus(
+  record: AssessmentLinkRecord,
+  prompts: PromptConfig[],
+  secretKey?: string,
+): Promise<AssessmentLinkStatus> {
+  if (record.consumed_session_id) {
+    return 'consumed';
+  }
+  if (record.expires_at <= Date.now()) {
+    return 'expired';
+  }
+  if (!secretKey || !prompts.some((prompt) => prompt.id === record.prompt_id)) {
+    return 'invalid';
+  }
+
+  try {
+    const payload = await verifyAssessmentLinkToken(record.token, secretKey);
+    if (
+      payload.jti !== record.id
+      || payload.prompt_id !== record.prompt_id
+      || payload.email !== record.candidate_email
+    ) {
+      return 'invalid';
+    }
+  } catch {
+    return 'invalid';
+  }
+
+  return 'active';
+}
+
+async function toAdminAssessmentLinkSummary(
+  record: AssessmentLinkRecord,
+  prompts: PromptConfig[],
+  secretKey?: string,
+): Promise<AdminAssessmentLinkSummary> {
+  const prompt = prompts.find((entry) => entry.id === record.prompt_id) ?? null;
+  const summary: AdminAssessmentLinkSummary = {
+    id: record.id,
+    url: record.url,
+    prompt_id: record.prompt_id,
+    candidate_email: record.candidate_email,
+    created_at: record.created_at,
+    expires_at: record.expires_at,
+    status: await resolveAssessmentLinkStatus(record, prompts, secretKey),
+  };
+
+  if (prompt) {
+    summary.prompt = toPromptSummary(prompt);
+  }
+  if (record.consumed_session_id) {
+    summary.consumed_session_id = record.consumed_session_id;
+  }
+
+  return summary;
+}
+
+async function toAdminAssessmentLinkDetail(
+  record: AssessmentLinkRecord,
+  prompts: PromptConfig[],
+  secretKey?: string,
+): Promise<AdminAssessmentLinkDetail> {
+  const detail: AdminAssessmentLinkDetail = {
+    ...(await toAdminAssessmentLinkSummary(record, prompts, secretKey)),
+    token: record.token,
+    constraint: record.constraint,
+  };
+
+  if (record.consumed_at !== undefined) {
+    detail.consumed_at = record.consumed_at;
+  }
+
+  return detail;
 }
 
 /** Create a fresh adapter from an AgentConfig provided in the request body. */
@@ -131,6 +226,12 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
   const adminKey = resolveAdminKey(config.api?.admin_key);
   const secretKey = resolveSecretKey(config.api?.secret_key);
 
+  router.get('/prompts', requireAdminKey(adminKey), (_req, res) => {
+    res.json({
+      prompts: config.prompts.map(toPromptSummary),
+    });
+  });
+
   router.post('/links', requireAdminKey(adminKey), asyncRoute(async (req, res) => {
     if (!secretKey) {
       res.status(503).json({ error: 'Assessment link signing secret is not configured' });
@@ -167,13 +268,14 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       isConstraintOverride(body.constraint_overrides) ? body.constraint_overrides : undefined,
     );
 
+    const createdAt = Date.now();
     const generated = await createAssessmentLinkToken(
       { prompt_id: body.prompt_id, email: body.email, constraint: constraints },
       secretKey,
       expiresInHours,
     );
 
-    const link = buildAssessmentLink(
+    const generatedLink = buildAssessmentLink(
       buildBaseUrl(req),
       generated.token,
       body.prompt_id,
@@ -181,10 +283,33 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       generated.expiresAt,
     );
 
-    res.status(201).json({
-      ...link,
-      prompt: toPromptSummary(prompt),
+    const link = await db.createAssessmentLink({
+      id: generated.jti,
+      token: generatedLink.token,
+      url: generatedLink.url,
+      prompt_id: body.prompt_id,
+      candidate_email: body.email,
+      created_at: createdAt,
+      expires_at: generated.expiresAt.getTime(),
+      constraint: constraints,
     });
+
+    const detail = await toAdminAssessmentLinkDetail(link, config.prompts, secretKey);
+
+    res.status(201).json({
+      ...detail,
+      prompt: toPromptSummary(prompt),
+      email: detail.candidate_email,
+    });
+  }));
+
+  router.get('/links', requireAdminKey(adminKey), asyncRoute(async (_req, res) => {
+    const records = await db.listAssessmentLinks();
+    const links = await Promise.all(
+      records.map((record) => toAdminAssessmentLinkSummary(record, config.prompts, secretKey)),
+    );
+
+    res.json({ links });
   }));
 
   router.post('/links/consume', asyncRoute(async (req, res) => {
@@ -252,6 +377,18 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       prompt: toPromptSummary(prompt),
       email: payload.email,
       expires_at: new Date(payload.exp * 1000).toISOString(),
+    });
+  }));
+
+  router.get('/links/:id', requireAdminKey(adminKey), asyncRoute(async (req, res) => {
+    const link = await db.getAssessmentLink(req.params['id'] as string);
+    if (!link) {
+      res.status(404).json({ error: 'Assessment link not found' });
+      return;
+    }
+
+    res.json({
+      link: await toAdminAssessmentLinkDetail(link, config.prompts, secretKey),
     });
   }));
 

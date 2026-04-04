@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { PostgresAdapter } from './database.js';
-import type { CreateSessionConfig } from './database.js';
+import { PostgresAdapter } from './database.ts';
+import type { CreateSessionConfig } from './database.ts';
 import type { Constraint } from './types.js';
 
 const poolInstances: MockPool[] = [];
@@ -67,10 +67,11 @@ describe('PostgresAdapter', () => {
     await adapter.initialize();
 
     const pool = latestPool();
-    expect(pool.queries.length).toBeGreaterThanOrEqual(5);
+    expect(pool.queries.length).toBeGreaterThanOrEqual(6);
     expect(pool.queries[0]!.text).toContain('CREATE TABLE IF NOT EXISTS sessions');
     expect(pool.queries.some((query) => query.text.includes('CREATE TABLE IF NOT EXISTS messages'))).toBe(true);
     expect(pool.queries.some((query) => query.text.includes('CREATE TABLE IF NOT EXISTS replay_events'))).toBe(true);
+    expect(pool.queries.some((query) => query.text.includes('CREATE TABLE IF NOT EXISTS assessment_links'))).toBe(true);
     expect(pool.queries.some((query) => query.text.includes('CREATE TABLE IF NOT EXISTS assessment_link_uses'))).toBe(true);
   });
 
@@ -186,6 +187,65 @@ describe('PostgresAdapter', () => {
     pool.queue.push({ rows: [], rowCount: 0 });
 
     await expect(adapter.markAssessmentLinkUsed('link-1', 'session-1')).resolves.toBe(false);
+  });
+
+  test('creates and lists persisted assessment links', async () => {
+    const adapter = new PostgresAdapter({ connectionString: 'postgres://lintic:test@localhost/lintic' });
+
+    await adapter.createAssessmentLink({
+      id: 'link-1',
+      token: 'token-1',
+      url: 'http://localhost:5173/assessment?token=token-1',
+      prompt_id: 'library-api',
+      candidate_email: 'alice@example.com',
+      created_at: 1000,
+      expires_at: 2000,
+      constraint: BASE_CONSTRAINT,
+    });
+
+    const pool = latestPool();
+    expect(pool.queries.at(-1)?.text).toContain('INSERT INTO assessment_links');
+
+    pool.queue.push({
+      rows: [{
+        id: 'link-1',
+        token: 'token-1',
+        url: 'http://localhost:5173/assessment?token=token-1',
+        prompt_id: 'library-api',
+        candidate_email: 'alice@example.com',
+        created_at: '1000',
+        expires_at: '2000',
+        constraint_json: JSON.stringify(BASE_CONSTRAINT),
+        consumed_session_id: 'session-1',
+        consumed_at: '1500',
+      }],
+      rowCount: 1,
+    });
+
+    const links = await adapter.listAssessmentLinks();
+
+    expect(pool.queries.at(-1)?.text).toContain('FROM assessment_links l');
+    expect(links).toEqual([{
+      id: 'link-1',
+      token: 'token-1',
+      url: 'http://localhost:5173/assessment?token=token-1',
+      prompt_id: 'library-api',
+      candidate_email: 'alice@example.com',
+      created_at: 1000,
+      expires_at: 2000,
+      constraint: BASE_CONSTRAINT,
+      consumed_session_id: 'session-1',
+      consumed_at: 1500,
+    }]);
+  });
+
+  test('returns null for an unknown persisted assessment link id', async () => {
+    const adapter = new PostgresAdapter({ connectionString: 'postgres://lintic:test@localhost/lintic' });
+    await adapter.initialize();
+    const pool = latestPool();
+    pool.queue.push({ rows: [], rowCount: 0 });
+
+    await expect(adapter.getAssessmentLink('missing-link')).resolves.toBeNull();
   });
 
   test('surfaces descriptive bootstrap errors', async () => {

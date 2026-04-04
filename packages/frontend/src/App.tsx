@@ -18,6 +18,7 @@ import type { TerminalHandle } from './components/Terminal.js';
 import { ReviewDashboard } from './components/ReviewDashboard.js';
 import { getReviewSessionId } from './lib/review-replay.js';
 import { AssessmentLinkLoader } from './components/AssessmentLinkLoader.js';
+import { AdminLinksDashboard } from './components/AdminLinksDashboard.js';
 import type { PromptSummary } from '@lintic/core';
 
 type AppState = 'setup' | 'active';
@@ -30,6 +31,10 @@ function getAssessmentLinkToken(location: Location): string | null {
   return new URLSearchParams(location.search).get('token');
 }
 
+function isAdminLinksRoute(location: Location): boolean {
+  return location.pathname === '/admin/links';
+}
+
 function generateToastId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -40,6 +45,9 @@ export function App() {
   );
   const [reviewSessionId, setReviewSessionId] = useState<string | null>(() =>
     typeof window === 'undefined' ? null : getReviewSessionId(window.location.pathname),
+  );
+  const [adminLinksRoute, setAdminLinksRoute] = useState<boolean>(() =>
+    typeof window === 'undefined' ? false : isAdminLinksRoute(window.location),
   );
   const [appState, setAppState] = useState<AppState>('setup');
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -68,6 +76,7 @@ export function App() {
     const handlePopState = () => {
       setAssessmentToken(getAssessmentLinkToken(window.location));
       setReviewSessionId(getReviewSessionId(window.location.pathname));
+      setAdminLinksRoute(isAdminLinksRoute(window.location));
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -95,7 +104,7 @@ export function App() {
   );
 
   useEffect(() => {
-    if (reviewSessionId || assessmentToken) {
+    if (reviewSessionId || assessmentToken || adminLinksRoute) {
       return;
     }
     getWebContainer()
@@ -104,7 +113,7 @@ export function App() {
         executorRef.current = new ToolExecutor(wc, (chunk) => terminalRef.current?.write(chunk));
       })
       .catch(() => { });
-  }, [reviewSessionId, assessmentToken]);
+  }, [reviewSessionId, assessmentToken, adminLinksRoute]);
 
   const handleSessionReady = useCallback((session: DevSession) => {
     setSessionId(session.sessionId);
@@ -187,6 +196,15 @@ export function App() {
           setAppState('active');
           window.history.replaceState({}, '', '/');
         }}
+      />
+    );
+  }
+
+  if (adminLinksRoute) {
+    return (
+      <AdminLinksDashboard
+        isDark={isDark}
+        onToggleTheme={() => setIsDark(!isDark)}
       />
     );
   }

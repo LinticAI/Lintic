@@ -139,6 +139,51 @@ export interface PromptSummary {
   tags?: string[];
 }
 
+export type AssessmentLinkStatus = 'active' | 'consumed' | 'expired' | 'invalid';
+
+export interface AssessmentLinkRecord {
+  id: string;
+  token: string;
+  url: string;
+  prompt_id: string;
+  candidate_email: string;
+  created_at: number; // Unix ms
+  expires_at: number; // Unix ms
+  constraint: Constraint;
+  consumed_session_id?: string;
+  consumed_at?: number; // Unix ms
+}
+
+export interface AdminAssessmentLinkSummary {
+  id: string;
+  url: string;
+  prompt_id: string;
+  candidate_email: string;
+  created_at: number;
+  expires_at: number;
+  status: AssessmentLinkStatus;
+  prompt?: PromptSummary | null;
+  consumed_session_id?: string;
+}
+
+export interface AdminAssessmentLinkDetail extends AdminAssessmentLinkSummary {
+  token: string;
+  constraint: Constraint;
+  consumed_at?: number;
+}
+
+export interface AdminAssessmentLinksResponse {
+  links: AdminAssessmentLinkSummary[];
+}
+
+export interface AdminAssessmentLinkDetailResponse {
+  link: AdminAssessmentLinkDetail;
+}
+
+export interface AdminPromptsResponse {
+  prompts: PromptSummary[];
+}
+
 // ─── Metrics ──────────────────────────────────────────────────────────────────
 
 export interface MetricResult {

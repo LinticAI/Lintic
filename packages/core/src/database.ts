@@ -1,7 +1,7 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { Pool, type PoolConfig } from 'pg';
-import type { Session, SessionStatus, Constraint, MessageRole, ReplayEventType } from './types.js';
+import type { AssessmentLinkRecord, Session, SessionStatus, Constraint, MessageRole, ReplayEventType } from './types.js';
 
 // ─── Stored Message ───────────────────────────────────────────────────────────
 
@@ -32,10 +32,22 @@ export interface CreateSessionConfig {
   constraint: Constraint;
 }
 
+export interface CreateAssessmentLinkConfig {
+  id: string;
+  token: string;
+  url: string;
+  prompt_id: string;
+  candidate_email: string;
+  created_at: number;
+  expires_at: number;
+  constraint: Constraint;
+}
+
 // ─── DatabaseAdapter Interface ────────────────────────────────────────────────
 
 export interface DatabaseAdapter {
   createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }>;
+  createAssessmentLink(config: CreateAssessmentLinkConfig): Promise<AssessmentLinkRecord>;
   getSession(id: string): Promise<Session | null>;
   getSessionToken(id: string): Promise<string | null>;
   addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void>;
@@ -43,6 +55,8 @@ export interface DatabaseAdapter {
   closeSession(id: string): Promise<void>;
   listSessions(): Promise<Session[]>;
   getSessionsByPrompt(promptId: string): Promise<Session[]>;
+  listAssessmentLinks(): Promise<AssessmentLinkRecord[]>;
+  getAssessmentLink(id: string): Promise<AssessmentLinkRecord | null>;
   validateSessionToken(id: string, token: string): Promise<boolean>;
   updateSessionUsage(id: string, additionalTokens: number, additionalInteractions: number): Promise<void>;
   addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void>;
@@ -89,6 +103,19 @@ interface ReplayEventRow {
   payload: string; // JSON text
 }
 
+interface AssessmentLinkRow {
+  id: string;
+  token: string;
+  url: string;
+  prompt_id: string;
+  candidate_email: string;
+  created_at: number;
+  expires_at: number;
+  constraint_json: string;
+  consumed_session_id?: string | null;
+  consumed_at?: number | null;
+}
+
 const SQLITE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -127,6 +154,17 @@ const SQLITE_SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_replay_events_session
     ON replay_events(session_id, timestamp ASC);
+
+  CREATE TABLE IF NOT EXISTS assessment_links (
+    id TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    url TEXT NOT NULL,
+    prompt_id TEXT NOT NULL,
+    candidate_email TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    constraint_json TEXT NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS assessment_link_uses (
     link_id TEXT PRIMARY KEY,
@@ -170,6 +208,16 @@ const POSTGRES_SCHEMA_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_replay_events_session
     ON replay_events(session_id, timestamp ASC, id ASC)`,
+  `CREATE TABLE IF NOT EXISTS assessment_links (
+    id TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    url TEXT NOT NULL,
+    prompt_id TEXT NOT NULL,
+    candidate_email TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    constraint_json TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS assessment_link_uses (
     link_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -216,6 +264,34 @@ export class SQLiteAdapter implements DatabaseAdapter {
     );
 
     return Promise.resolve({ id, token });
+  }
+
+  createAssessmentLink(config: CreateAssessmentLinkConfig): Promise<AssessmentLinkRecord> {
+    this.db.prepare(`
+      INSERT INTO assessment_links (
+        id, token, url, prompt_id, candidate_email, created_at, expires_at, constraint_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      config.id,
+      config.token,
+      config.url,
+      config.prompt_id,
+      config.candidate_email,
+      config.created_at,
+      config.expires_at,
+      JSON.stringify(config.constraint),
+    );
+
+    return Promise.resolve({
+      id: config.id,
+      token: config.token,
+      url: config.url,
+      prompt_id: config.prompt_id,
+      candidate_email: config.candidate_email,
+      created_at: config.created_at,
+      expires_at: config.expires_at,
+      constraint: config.constraint,
+    });
   }
 
   getSession(id: string): Promise<Session | null> {
@@ -269,6 +345,48 @@ export class SQLiteAdapter implements DatabaseAdapter {
       'SELECT * FROM sessions WHERE prompt_id = ? ORDER BY created_at DESC'
     ).all(promptId) as SessionRow[];
     return Promise.resolve(rows.map(rowToSession));
+  }
+
+  listAssessmentLinks(): Promise<AssessmentLinkRecord[]> {
+    const rows = this.db.prepare(`
+      SELECT
+        l.id,
+        l.token,
+        l.url,
+        l.prompt_id,
+        l.candidate_email,
+        l.created_at,
+        l.expires_at,
+        l.constraint_json,
+        u.session_id AS consumed_session_id,
+        u.used_at AS consumed_at
+      FROM assessment_links l
+      LEFT JOIN assessment_link_uses u ON u.link_id = l.id
+      ORDER BY l.created_at DESC
+    `).all() as AssessmentLinkRow[];
+
+    return Promise.resolve(rows.map(rowToAssessmentLink));
+  }
+
+  getAssessmentLink(id: string): Promise<AssessmentLinkRecord | null> {
+    const row = this.db.prepare(`
+      SELECT
+        l.id,
+        l.token,
+        l.url,
+        l.prompt_id,
+        l.candidate_email,
+        l.created_at,
+        l.expires_at,
+        l.constraint_json,
+        u.session_id AS consumed_session_id,
+        u.used_at AS consumed_at
+      FROM assessment_links l
+      LEFT JOIN assessment_link_uses u ON u.link_id = l.id
+      WHERE l.id = ?
+    `).get(id) as AssessmentLinkRow | undefined;
+
+    return Promise.resolve(row ? rowToAssessmentLink(row) : null);
   }
 
   validateSessionToken(id: string, token: string): Promise<boolean> {
@@ -386,6 +504,39 @@ export class PostgresAdapter implements DatabaseAdapter {
     return { id, token };
   }
 
+  async createAssessmentLink(config: CreateAssessmentLinkConfig): Promise<AssessmentLinkRecord> {
+    await this.initialize();
+
+    await this.pool.query(
+      `INSERT INTO assessment_links (
+        id, token, url, prompt_id, candidate_email, created_at, expires_at, constraint_json
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8
+      )`,
+      [
+        config.id,
+        config.token,
+        config.url,
+        config.prompt_id,
+        config.candidate_email,
+        config.created_at,
+        config.expires_at,
+        JSON.stringify(config.constraint),
+      ],
+    );
+
+    return {
+      id: config.id,
+      token: config.token,
+      url: config.url,
+      prompt_id: config.prompt_id,
+      candidate_email: config.candidate_email,
+      created_at: config.created_at,
+      expires_at: config.expires_at,
+      constraint: config.constraint,
+    };
+  }
+
   async getSession(id: string): Promise<Session | null> {
     await this.initialize();
     const result = await this.pool.query<SessionRow>('SELECT * FROM sessions WHERE id = $1', [id]);
@@ -445,6 +596,49 @@ export class PostgresAdapter implements DatabaseAdapter {
       [promptId],
     );
     return result.rows.map((row) => rowToSession(normalizeSessionRow(row)));
+  }
+
+  async listAssessmentLinks(): Promise<AssessmentLinkRecord[]> {
+    await this.initialize();
+    const result = await this.pool.query<AssessmentLinkRow>(
+      `SELECT
+         l.id,
+         l.token,
+         l.url,
+         l.prompt_id,
+         l.candidate_email,
+         l.created_at,
+         l.expires_at,
+         l.constraint_json,
+         u.session_id AS consumed_session_id,
+         u.used_at AS consumed_at
+       FROM assessment_links l
+       LEFT JOIN assessment_link_uses u ON u.link_id = l.id
+       ORDER BY l.created_at DESC`,
+    );
+    return result.rows.map((row) => rowToAssessmentLink(normalizeAssessmentLinkRow(row)));
+  }
+
+  async getAssessmentLink(id: string): Promise<AssessmentLinkRecord | null> {
+    await this.initialize();
+    const result = await this.pool.query<AssessmentLinkRow>(
+      `SELECT
+         l.id,
+         l.token,
+         l.url,
+         l.prompt_id,
+         l.candidate_email,
+         l.created_at,
+         l.expires_at,
+         l.constraint_json,
+         u.session_id AS consumed_session_id,
+         u.used_at AS consumed_at
+       FROM assessment_links l
+       LEFT JOIN assessment_link_uses u ON u.link_id = l.id
+       WHERE l.id = $1`,
+      [id],
+    );
+    return result.rows[0] ? rowToAssessmentLink(normalizeAssessmentLinkRow(result.rows[0])) : null;
   }
 
   async validateSessionToken(id: string, token: string): Promise<boolean> {
@@ -546,6 +740,15 @@ function normalizeSessionRow(row: SessionRow): SessionRow {
   };
 }
 
+function normalizeAssessmentLinkRow(row: AssessmentLinkRow): AssessmentLinkRow {
+  return {
+    ...row,
+    created_at: Number(row.created_at),
+    expires_at: Number(row.expires_at),
+    consumed_at: row.consumed_at === null || row.consumed_at === undefined ? null : Number(row.consumed_at),
+  };
+}
+
 function rowToSession(row: SessionRow): Session {
   const constraint: Constraint = {
     max_session_tokens: row.max_session_tokens,
@@ -574,4 +777,26 @@ function rowToSession(row: SessionRow): Session {
   }
 
   return session;
+}
+
+function rowToAssessmentLink(row: AssessmentLinkRow): AssessmentLinkRecord {
+  const link: AssessmentLinkRecord = {
+    id: row.id,
+    token: row.token,
+    url: row.url,
+    prompt_id: row.prompt_id,
+    candidate_email: row.candidate_email,
+    created_at: row.created_at,
+    expires_at: row.expires_at,
+    constraint: JSON.parse(row.constraint_json) as Constraint,
+  };
+
+  if (row.consumed_session_id) {
+    link.consumed_session_id = row.consumed_session_id;
+  }
+  if (row.consumed_at !== null && row.consumed_at !== undefined) {
+    link.consumed_at = row.consumed_at;
+  }
+
+  return link;
 }

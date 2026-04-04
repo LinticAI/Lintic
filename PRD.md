@@ -336,14 +336,14 @@ For UI stories, also include:
 **Description:** As a company admin, I need a dashboard to generate assessment links and inspect previously generated links so I can manage candidate access from the UI.
 
 **Acceptance Criteria:**
-- [ ] Admin dashboard route available in the frontend for assessment link management
-- [ ] Admin can generate a new assessment link by selecting a prompt, entering candidate email, and optional expiry/constraint overrides
-- [ ] Dashboard lists all generated assessment links with prompt, candidate email, created time, expiry, and associated session when consumed
-- [ ] Dashboard shows link status at a glance: active, consumed, expired, or invalid
-- [ ] Admin can inspect an individual link to view its full metadata and current state
-- [ ] Dashboard supports copying the generated assessment link from the UI
-- [ ] Backend provides API support to list generated links and fetch link details for inspection
-- [ ] Typecheck passes
+- [x] Admin dashboard route available in the frontend for assessment link management
+- [x] Admin can generate a new assessment link by selecting a prompt, entering candidate email, and optional expiry/constraint overrides
+- [x] Dashboard lists all generated assessment links with prompt, candidate email, created time, expiry, and associated session when consumed
+- [x] Dashboard shows link status at a glance: active, consumed, expired, or invalid
+- [x] Admin can inspect an individual link to view its full metadata and current state
+- [x] Dashboard supports copying the generated assessment link from the UI
+- [x] Backend provides API support to list generated links and fetch link details for inspection
+- [x] Typecheck passes
 
 ### US-020: Redis infrastructure mock package
 

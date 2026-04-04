@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, test, expect } from 'vitest';
 import request from 'supertest';
 import type {
+  AssessmentLinkRecord,
   DatabaseAdapter,
   AgentAdapter,
   AgentConfig,
@@ -15,6 +16,7 @@ import type {
   Session,
   StoredMessage,
   StoredReplayEvent,
+  CreateAssessmentLinkConfig,
   CreateSessionConfig,
   MessageRole,
   ReplayEventType,
@@ -51,6 +53,7 @@ class FakeDb implements DatabaseAdapter {
   sessions = new Map<string, Session & { token: string }>();
   messageStore = new Map<string, StoredMessage[]>();
   replayStore = new Map<string, StoredReplayEvent[]>();
+  assessmentLinks = new Map<string, AssessmentLinkRecord>();
   nextMsgId = 1;
 
   createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
@@ -71,6 +74,21 @@ class FakeDb implements DatabaseAdapter {
     this.messageStore.set(id, []);
     this.replayStore.set(id, []);
     return Promise.resolve({ id, token });
+  }
+
+  createAssessmentLink(config: CreateAssessmentLinkConfig): Promise<AssessmentLinkRecord> {
+    const link: AssessmentLinkRecord = {
+      id: config.id,
+      token: config.token,
+      url: config.url,
+      prompt_id: config.prompt_id,
+      candidate_email: config.candidate_email,
+      created_at: config.created_at,
+      expires_at: config.expires_at,
+      constraint: config.constraint,
+    };
+    this.assessmentLinks.set(link.id, link);
+    return Promise.resolve(link);
   }
 
   getSession(id: string): Promise<Session | null> {
@@ -115,6 +133,16 @@ class FakeDb implements DatabaseAdapter {
     return Promise.resolve([...this.sessions.values()].filter((s) => s.prompt_id === promptId));
   }
 
+  listAssessmentLinks(): Promise<AssessmentLinkRecord[]> {
+    return Promise.resolve(
+      [...this.assessmentLinks.values()].sort((a, b) => b.created_at - a.created_at),
+    );
+  }
+
+  getAssessmentLink(id: string): Promise<AssessmentLinkRecord | null> {
+    return Promise.resolve(this.assessmentLinks.get(id) ?? null);
+  }
+
   validateSessionToken(id: string, token: string): Promise<boolean> {
     const session = this.sessions.get(id);
     return Promise.resolve(session?.token === token);
@@ -146,6 +174,14 @@ class FakeDb implements DatabaseAdapter {
   markAssessmentLinkUsed(linkId: string, _sessionId: string): Promise<boolean> {
     if (this.replayStore.has(`link:${linkId}`)) {
       return Promise.resolve(false);
+    }
+    const link = this.assessmentLinks.get(linkId);
+    if (link) {
+      this.assessmentLinks.set(linkId, {
+        ...link,
+        consumed_session_id: _sessionId,
+        consumed_at: Date.now(),
+      });
     }
     this.replayStore.set(`link:${linkId}`, [{ id: 0, session_id: _sessionId, type: 'message', timestamp: 0, payload: null }]);
     return Promise.resolve(true);
@@ -369,16 +405,20 @@ describe('POST /api/links', () => {
 
     expect(res.status).toBe(201);
     const body = res.body as {
+      id: string;
       url: string;
       token: string;
       prompt_id: string;
-      email: string;
+      candidate_email: string;
+      status: string;
       prompt: { id: string; title: string };
     };
+    expect(body.id).toBeTruthy();
     expect(body.url).toContain('/assessment?token=');
     expect(body.token.length).toBeGreaterThan(0);
     expect(body.prompt_id).toBe('test-prompt');
-    expect(body.email).toBe('candidate@example.com');
+    expect(body.candidate_email).toBe('candidate@example.com');
+    expect(body.status).toBe('active');
     expect(body.prompt).toEqual({ id: 'test-prompt', title: 'Test Prompt' });
   });
 
@@ -389,6 +429,32 @@ describe('POST /api/links', () => {
       .send({ prompt_id: 'test-prompt', email: 'candidate@example.com' });
 
     expect(res.status).toBe(401);
+  });
+
+  test('uses the browser Origin header when generating the assessment URL', async () => {
+    const app = createApp(new FakeDb(), new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app)
+      .post('/api/links')
+      .set('X-Lintic-Api-Key', 'admin-key')
+      .set('Origin', 'http://localhost:5173')
+      .send({ prompt_id: 'test-prompt', email: 'candidate@example.com' });
+
+    expect(res.status).toBe(201);
+    expect((res.body as { url: string }).url).toContain('http://localhost:5173/assessment?token=');
+  });
+});
+
+describe('GET /api/prompts', () => {
+  test('returns prompt catalog for admins', async () => {
+    const app = createApp(new FakeDb(), new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app)
+      .get('/api/prompts')
+      .set('X-Lintic-Api-Key', 'admin-key');
+
+    expect(res.status).toBe(200);
+    expect((res.body as { prompts: Array<{ id: string; title: string }> }).prompts).toEqual([
+      { id: 'test-prompt', title: 'Test Prompt' },
+    ]);
   });
 });
 
@@ -435,6 +501,113 @@ describe('POST /api/links/consume', () => {
     expect((second.body as { session_id: string }).session_id).toBe(
       (first.body as { session_id: string }).session_id,
     );
+  });
+});
+
+describe('GET /api/links', () => {
+  test('requires an admin key', async () => {
+    const app = createApp(new FakeDb(), new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app).get('/api/links');
+
+    expect(res.status).toBe(401);
+  });
+
+  test('returns persisted links with derived statuses', async () => {
+    const db = new FakeDb();
+    const future = Date.now() + 60_000;
+    const past = Date.now() - 60_000;
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+
+    const created = await request(app)
+      .post('/api/links')
+      .set('X-Lintic-Api-Key', 'admin-key')
+      .send({ prompt_id: 'test-prompt', email: 'active@example.com' });
+    const createdId = (created.body as { id: string }).id;
+
+    db.assessmentLinks.set('active-link', {
+      id: 'active-link',
+      token: 'unused',
+      url: 'http://localhost:3000/assessment?token=active',
+      prompt_id: 'missing-prompt',
+      candidate_email: 'active@example.com',
+      created_at: Date.now(),
+      expires_at: future,
+      constraint: BASE_CONSTRAINT,
+    });
+    db.assessmentLinks.set('expired-link', {
+      id: 'expired-link',
+      token: 'unused',
+      url: 'http://localhost:3000/assessment?token=expired',
+      prompt_id: 'test-prompt',
+      candidate_email: 'expired@example.com',
+      created_at: Date.now() - 10_000,
+      expires_at: past,
+      constraint: BASE_CONSTRAINT,
+    });
+    db.assessmentLinks.set('consumed-link', {
+      id: 'consumed-link',
+      token: 'unused',
+      url: 'http://localhost:3000/assessment?token=consumed',
+      prompt_id: 'test-prompt',
+      candidate_email: 'consumed@example.com',
+      created_at: Date.now() - 20_000,
+      expires_at: future,
+      constraint: BASE_CONSTRAINT,
+      consumed_session_id: 'sess-42',
+      consumed_at: Date.now() - 5_000,
+    });
+
+    const res = await request(app)
+      .get('/api/links')
+      .set('X-Lintic-Api-Key', 'admin-key');
+
+    expect(res.status).toBe(200);
+    expect((res.body as { links: Array<{ id: string; status: string }> }).links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: createdId, status: 'active' }),
+        expect.objectContaining({ id: 'active-link', status: 'invalid' }),
+        expect.objectContaining({ id: 'expired-link', status: 'expired' }),
+        expect.objectContaining({ id: 'consumed-link', status: 'consumed' }),
+      ]),
+    );
+  });
+});
+
+describe('GET /api/links/:id', () => {
+  test('returns full metadata for a persisted link', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    db.assessmentLinks.set('link-1', {
+      id: 'link-1',
+      token: 'token-1',
+      url: 'http://localhost:3000/assessment?token=token-1',
+      prompt_id: 'missing-prompt',
+      candidate_email: 'candidate@example.com',
+      created_at: 1000,
+      expires_at: 2000,
+      constraint: BASE_CONSTRAINT,
+    });
+
+    const res = await request(app)
+      .get('/api/links/link-1')
+      .set('X-Lintic-Api-Key', 'admin-key');
+
+    expect(res.status).toBe(200);
+    expect((res.body as { link: { id: string; token: string; constraint: Constraint; status: string } }).link).toMatchObject({
+      id: 'link-1',
+      token: 'token-1',
+      constraint: BASE_CONSTRAINT,
+      status: 'expired',
+    });
+  });
+
+  test('returns 404 for an unknown persisted link', async () => {
+    const app = createApp(new FakeDb(), new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app)
+      .get('/api/links/missing')
+      .set('X-Lintic-Api-Key', 'admin-key');
+
+    expect(res.status).toBe(404);
   });
 });
 

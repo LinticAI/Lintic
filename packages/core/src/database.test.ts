@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { SQLiteAdapter } from './database.js';
-import type { CreateSessionConfig } from './database.js';
+import { SQLiteAdapter } from './database.ts';
+import type { CreateSessionConfig } from './database.ts';
 import type { Constraint } from './types.js';
 
 const BASE_CONSTRAINT: Constraint = {
@@ -237,6 +237,94 @@ describe('getSessionsByPrompt', () => {
     const results = await db.getSessionsByPrompt('library-api');
     expect(results).toHaveLength(2);
     results.forEach((s) => expect(s.prompt_id).toBe('library-api'));
+  });
+});
+
+describe('assessment link persistence', () => {
+  test('persists a created assessment link record', async () => {
+    const db = makeAdapter();
+
+    const link = await db.createAssessmentLink({
+      id: 'link-1',
+      token: 'token-1',
+      url: 'http://localhost:5173/assessment?token=token-1',
+      prompt_id: 'library-api',
+      candidate_email: 'alice@example.com',
+      created_at: 1000,
+      expires_at: 2000,
+      constraint: BASE_CONSTRAINT,
+    });
+
+    expect(link).toEqual({
+      id: 'link-1',
+      token: 'token-1',
+      url: 'http://localhost:5173/assessment?token=token-1',
+      prompt_id: 'library-api',
+      candidate_email: 'alice@example.com',
+      created_at: 1000,
+      expires_at: 2000,
+      constraint: BASE_CONSTRAINT,
+    });
+    await expect(db.getAssessmentLink('link-1')).resolves.toEqual(link);
+  });
+
+  test('lists assessment links newest first', async () => {
+    const db = makeAdapter();
+
+    await db.createAssessmentLink({
+      id: 'link-1',
+      token: 'token-1',
+      url: 'http://localhost:5173/assessment?token=token-1',
+      prompt_id: 'library-api',
+      candidate_email: 'alice@example.com',
+      created_at: 1000,
+      expires_at: 2000,
+      constraint: BASE_CONSTRAINT,
+    });
+    await db.createAssessmentLink({
+      id: 'link-2',
+      token: 'token-2',
+      url: 'http://localhost:5173/assessment?token=token-2',
+      prompt_id: 'library-api',
+      candidate_email: 'bob@example.com',
+      created_at: 2000,
+      expires_at: 3000,
+      constraint: BASE_CONSTRAINT,
+    });
+
+    await expect(db.listAssessmentLinks()).resolves.toMatchObject([
+      { id: 'link-2', candidate_email: 'bob@example.com' },
+      { id: 'link-1', candidate_email: 'alice@example.com' },
+    ]);
+  });
+
+  test('returns link detail with its constraint snapshot and consumed session metadata', async () => {
+    const db = makeAdapter();
+    const session = await db.createSession(BASE_CONFIG);
+    await db.createAssessmentLink({
+      id: 'link-1',
+      token: 'token-1',
+      url: 'http://localhost:5173/assessment?token=token-1',
+      prompt_id: 'library-api',
+      candidate_email: 'alice@example.com',
+      created_at: 1000,
+      expires_at: 2000,
+      constraint: {
+        ...BASE_CONSTRAINT,
+        max_interactions: 12,
+      },
+    });
+
+    await db.markAssessmentLinkUsed('link-1', session.id);
+
+    await expect(db.getAssessmentLink('link-1')).resolves.toMatchObject({
+      id: 'link-1',
+      constraint: {
+        ...BASE_CONSTRAINT,
+        max_interactions: 12,
+      },
+      consumed_session_id: session.id,
+    });
   });
 });
 
