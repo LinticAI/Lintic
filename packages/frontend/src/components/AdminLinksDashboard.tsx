@@ -275,7 +275,7 @@ export function AdminLinksDashboard({
               type="submit"
               disabled={!draftAdminKey.trim()}
               className="rounded-2xl px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
-              style={{ background: 'var(--color-brand-orange)', color: 'white' }}
+              style={{ background: 'var(--color-brand)', color: 'white' }}
             >
               Load dashboard
             </button>
@@ -425,7 +425,7 @@ export function AdminLinksDashboard({
                     type="submit"
                     disabled={!adminKey || loading || createLoading || !promptId || !candidateEmail.trim()}
                     className="rounded-2xl px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
-                    style={{ background: 'var(--color-brand-orange)', color: 'white' }}
+                    style={{ background: 'var(--color-brand)', color: 'white' }}
                   >
                     {createLoading ? 'Generating link…' : 'Generate assessment link'}
                   </button>
@@ -499,14 +499,14 @@ export function AdminLinksDashboard({
                                   ? 'rgba(245, 158, 11, 0.12)'
                                   : link.status === 'invalid'
                                     ? 'rgba(239, 68, 68, 0.12)'
-                                    : 'rgba(232, 98, 42, 0.12)',
+                                    : 'rgba(56, 135, 206, 0.12)',
                               color: link.status === 'consumed'
                                 ? 'var(--color-status-success)'
                                 : link.status === 'expired'
                                   ? 'var(--color-status-warning)'
                                   : link.status === 'invalid'
                                     ? 'var(--color-status-error)'
-                                    : 'var(--color-brand-orange)',
+                                    : 'var(--color-brand)',
                             }}
                           >
                             {formatStatus(link.status)}
@@ -517,7 +517,7 @@ export function AdminLinksDashboard({
                             <a
                               href={`/review/${link.consumed_session_id}`}
                               className="underline"
-                              style={{ color: 'var(--color-brand-orange)' }}
+                              style={{ color: 'var(--color-brand)' }}
                             >
                               {link.consumed_session_id}
                             </a>

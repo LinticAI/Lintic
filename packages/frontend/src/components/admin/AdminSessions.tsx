@@ -15,7 +15,7 @@ function relativeTime(ts: number): string {
 }
 
 const STATUS_DOT: Record<string, string> = {
-  active: 'var(--color-brand-orange)',
+  active: 'var(--color-brand)',
   consumed: 'var(--color-status-success)',
   expired: 'var(--color-status-warning)',
   invalid: 'var(--color-status-error)',
@@ -137,10 +137,10 @@ export function AdminSessions({ onNavigate }: AdminSessionsProps) {
                       <button
                         type="button"
                         className="rounded-sm px-2 py-1 text-[11px] font-medium transition-colors"
-                        style={{ background: 'rgba(232,98,42,0.1)', color: 'var(--color-brand-orange)' }}
+                        style={{ background: 'rgba(56,135,206,0.1)', color: 'var(--color-brand)' }}
                         onClick={() => onNavigate('reviews', link.consumed_session_id!)}
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(232,98,42,0.18)'; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(232,98,42,0.1)'; }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(56,135,206,0.18)'; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(56,135,206,0.1)'; }}
                       >
                         Review
                       </button>

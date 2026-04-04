@@ -16,8 +16,8 @@ interface Props {
 const LIGHT_THEME = { 
   background: '#FFFBF7', 
   foreground: '#1A1520', 
-  cursor: '#E8622A',
-  selectionBackground: 'rgba(232, 98, 42, 0.2)',
+  cursor: '#3887ce',
+  selectionBackground: 'rgba(56, 135, 206, 0.2)',
   black: '#1A1520',
   red: '#E87461',
   green: '#2D8A2D',
@@ -31,8 +31,8 @@ const LIGHT_THEME = {
 const DARK_THEME = { 
   background: '#141414', 
   foreground: '#eeeeee', 
-  cursor: '#E8622A',
-  selectionBackground: 'rgba(232, 98, 42, 0.3)',
+  cursor: '#3887ce',
+  selectionBackground: 'rgba(56, 135, 206, 0.3)',
   black: '#000000',
   red: '#fca5a5',
   green: '#4ade80',

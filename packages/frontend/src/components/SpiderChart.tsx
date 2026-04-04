@@ -60,9 +60,9 @@ export function SpiderChart({ metrics, size = 160 }: SpiderChartProps) {
 
         <motion.path
           d={polygonPath}
-          fill="var(--color-brand-orange)"
+          fill="var(--color-brand)"
           fillOpacity="0.15"
-          stroke="var(--color-brand-orange)"
+          stroke="var(--color-brand)"
           strokeWidth="1.5"
           initial={{ pathLength: 0, opacity: 0 }}
           animate={{ pathLength: 1, opacity: 1 }}
@@ -70,7 +70,7 @@ export function SpiderChart({ metrics, size = 160 }: SpiderChartProps) {
         />
 
         {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="2.5" fill="var(--color-brand-orange)" />
+          <circle key={i} cx={p.x} cy={p.y} r="2.5" fill="var(--color-brand)" />
         ))}
       </svg>
 
@@ -81,7 +81,7 @@ export function SpiderChart({ metrics, size = 160 }: SpiderChartProps) {
             <div className="flex items-center gap-1.5 min-w-0">
               <div
                 className="h-1 w-1 shrink-0 rounded-full"
-                style={{ background: 'var(--color-brand-orange)' }}
+                style={{ background: 'var(--color-brand)' }}
               />
               <span className="truncate text-[10px] uppercase tracking-wider" style={{ color: 'var(--color-text-dim)' }}>
                 {metric.label}

@@ -20,7 +20,7 @@ export function AdminSettings({ isDark, onToggleTheme }: AdminSettingsProps) {
     window.setTimeout(() => setSaved(false), 2000);
   }
 
-  const inputClass = 'w-full rounded-sm border bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-[var(--color-brand-orange)] transition-colors';
+  const inputClass = 'w-full rounded-sm border bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-[var(--color-brand)] transition-colors';
   const inputStyle = { borderColor: 'var(--color-border-main)', color: 'var(--color-text-main)' };
 
   return (
@@ -75,7 +75,7 @@ export function AdminSettings({ isDark, onToggleTheme }: AdminSettingsProps) {
               type="submit"
               disabled={!draft.trim()}
               className="flex items-center gap-1.5 rounded-sm px-4 py-1.5 text-[12px] font-semibold disabled:opacity-40 transition-colors"
-              style={{ background: 'var(--color-brand-orange)', color: 'white' }}
+              style={{ background: 'var(--color-brand)', color: 'white' }}
             >
               {saved ? <><Check size={11} /> Saved</> : 'Save key'}
             </button>
@@ -145,7 +145,7 @@ export function AdminSettings({ isDark, onToggleTheme }: AdminSettingsProps) {
             rel="noopener noreferrer"
             className="underline transition-colors"
             style={{ color: 'var(--color-text-dim)' }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--color-brand-orange)'; }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--color-brand)'; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--color-text-dim)'; }}
           >
             GitHub →

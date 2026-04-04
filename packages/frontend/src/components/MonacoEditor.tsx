@@ -14,7 +14,7 @@ loader.init().then((monaco) => {
       'editorLineNumber.foreground': '#CBC5D1',
       'editorLineNumber.activeForeground': '#1A1520',
       'editorIndentGuide.background': '#F5F0EB',
-      'editorIndentGuide.activeBackground': '#E8622A',
+      'editorIndentGuide.activeBackground': '#3887ce',
     },
   });
   monaco.editor.defineTheme('lintic-dark', {

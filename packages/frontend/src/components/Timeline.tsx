@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { type ReviewReplayEvent, describeReviewEvent } from '../lib/review-replay.js';
 
 const EVENT_COLOR: Record<string, string> = {
-  message: 'var(--color-brand-orange)',
+  message: 'var(--color-brand)',
   agent_response: 'var(--color-brand-green)',
   code_change: 'var(--color-status-warning)',
 };
@@ -30,7 +30,7 @@ export function Timeline({ events, selectedEventIndex, onSelectEvent }: Timeline
 
         if (isSelected) {
           barHeight = '100%';
-          barBg = accentColor ?? 'var(--color-brand-orange)';
+          barBg = accentColor ?? 'var(--color-brand)';
         } else if (isHovered) {
           barHeight = '75%';
           barBg = accentColor ? accentColor : 'rgba(255,255,255,0.4)';

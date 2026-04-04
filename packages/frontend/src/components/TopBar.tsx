@@ -62,7 +62,7 @@ export function TopBar({
               data-1p-ignore
               data-testid="view-prompt"
               onClick={onViewPrompt}
-              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#1A1A1A] text-[#E8622A] text-[13px] font-bold tracking-tight hover:brightness-125 transition-all border border-white/5 shadow-lg"
+              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#1A1A1A] text-[#3887ce] text-[13px] font-bold tracking-tight hover:brightness-125 transition-all border border-white/5 shadow-lg"
             >
               View full prompt
             </button>

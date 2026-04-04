@@ -35,7 +35,7 @@ export function AdminTasks({}: AdminTasksProps) {
     setShowAdd(false);
   }
 
-  const inputClass = 'w-full rounded-sm border bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-[var(--color-brand-orange)] transition-colors';
+  const inputClass = 'w-full rounded-sm border bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-[var(--color-brand)] transition-colors';
   const inputStyle = { borderColor: 'var(--color-border-main)', color: 'var(--color-text-main)' };
 
   return (
@@ -64,7 +64,7 @@ export function AdminTasks({}: AdminTasksProps) {
               type="button"
               onClick={() => { setShowAdd((v) => !v); setError(null); }}
               className="flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-[11px] font-semibold"
-              style={{ background: 'var(--color-brand-orange)', color: 'white' }}
+              style={{ background: 'var(--color-brand)', color: 'white' }}
             >
               <Plus size={11} />
               Add Task
@@ -123,7 +123,7 @@ export function AdminTasks({}: AdminTasksProps) {
               <button
                 type="submit"
                 className="rounded-sm px-4 py-1.5 text-[12px] font-semibold"
-                style={{ background: 'var(--color-brand-orange)', color: 'white' }}
+                style={{ background: 'var(--color-brand)', color: 'white' }}
               >
                 Add task
               </button>

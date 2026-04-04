@@ -160,10 +160,10 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
                     <button
                       type="button"
                       className="rounded-sm px-2.5 py-1 text-[11px] font-medium transition-colors"
-                      style={{ background: 'rgba(232,98,42,0.1)', color: 'var(--color-brand-orange)' }}
+                      style={{ background: 'rgba(56,135,206,0.1)', color: 'var(--color-brand)' }}
                       onClick={() => setReviewId(link.consumed_session_id!)}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(232,98,42,0.18)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(232,98,42,0.1)'; }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(56,135,206,0.18)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(56,135,206,0.1)'; }}
                     >
                       Open Review
                     </button>

@@ -106,7 +106,7 @@ function parseToolResultBody(body: string): Array<{ name: string; summary: strin
 // ── Metrics strip ───────────────────────────────────────────────────────────
 
 const METRIC_COLORS = [
-  '#E8622A', // orange
+  '#3887ce', // orange
   '#3B82F6', // blue
   '#10B981', // green
   '#F59E0B', // amber
@@ -130,7 +130,7 @@ function MetricsStrip({ metrics }: { metrics: ReviewMetric[] }) {
       style={{ borderColor: 'var(--color-border-main)', background: 'var(--color-bg-panel)' }}
     >
       {metrics.map((metric, i) => {
-        const color = METRIC_COLORS[i % METRIC_COLORS.length] ?? '#E8622A';
+        const color = METRIC_COLORS[i % METRIC_COLORS.length] ?? '#3887ce';
         const abbrev = getAbbrev(metric.label);
         const pct = Math.round(metric.score * 100);
         return (
@@ -253,8 +253,8 @@ function ToolGroup({
       className="rounded-sm"
       style={{
         opacity: isPast ? 1 : 0.2,
-        border: isAnchor ? '1px solid rgba(232,98,42,0.25)' : '1px solid var(--color-border-muted)',
-        background: isAnchor ? 'rgba(232,98,42,0.05)' : 'rgba(255,255,255,0.02)',
+        border: isAnchor ? '1px solid rgba(56,135,206,0.25)' : '1px solid var(--color-border-muted)',
+        background: isAnchor ? 'rgba(56,135,206,0.05)' : 'rgba(255,255,255,0.02)',
       }}
     >
       {/* Collapsed header */}
@@ -317,7 +317,7 @@ function ToolGroup({
                 {/* Tool name */}
                 <span
                   className="font-mono text-[10px] font-semibold"
-                  style={{ color: 'var(--color-brand-orange)' }}
+                  style={{ color: 'var(--color-brand)' }}
                 >
                   {call.name}
                 </span>
@@ -430,7 +430,7 @@ export function ReviewDashboard({
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-3"
         style={{ background: 'var(--color-bg-app)', color: 'var(--color-text-dim)' }}>
-        <Activity size={20} className="animate-pulse text-[var(--color-brand-orange)]" />
+        <Activity size={20} className="animate-pulse text-[var(--color-brand)]" />
         <span className="text-[12px]">Loading session…</span>
       </div>
     );
@@ -471,12 +471,12 @@ export function ReviewDashboard({
           </div>
           <span className="shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
             style={{
-              background: data.session.status === 'completed' ? 'rgba(16,185,129,0.1)' : 'rgba(232,98,42,0.1)',
-              color: data.session.status === 'completed' ? 'var(--color-status-success)' : 'var(--color-brand-orange)',
+              background: data.session.status === 'completed' ? 'rgba(16,185,129,0.1)' : 'rgba(56,135,206,0.1)',
+              color: data.session.status === 'completed' ? 'var(--color-status-success)' : 'var(--color-brand)',
             }}>
             {data.session.status}
           </span>
-          <span className="shrink-0 text-[13px] font-bold tabular-nums" style={{ color: 'var(--color-brand-orange)' }}>
+          <span className="shrink-0 text-[13px] font-bold tabular-nums" style={{ color: 'var(--color-brand)' }}>
             {overallScore}
           </span>
         </div>
@@ -530,7 +530,7 @@ export function ReviewDashboard({
         <div className="flex min-h-0 w-[280px] shrink-0 flex-col border-r" style={{ borderColor: 'var(--color-border-main)' }}>
           <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2"
             style={{ borderColor: 'var(--color-border-main)' }}>
-            <MessageSquare size={12} style={{ color: 'var(--color-brand-orange)' }} />
+            <MessageSquare size={12} style={{ color: 'var(--color-brand)' }} />
             <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-dim)' }}>
               Conversation
             </span>
@@ -562,17 +562,17 @@ export function ReviewDashboard({
                   className="rounded-sm p-2.5 text-[12px] leading-relaxed"
                   style={{
                     background: isAnchor
-                      ? 'rgba(232,98,42,0.08)'
+                      ? 'rgba(56,135,206,0.08)'
                       : isUser ? 'var(--color-bg-user-msg)' : 'var(--color-bg-agent-msg)',
                     border: isAnchor
-                      ? '1px solid rgba(232,98,42,0.25)'
+                      ? '1px solid rgba(56,135,206,0.25)'
                       : '1px solid var(--color-border-muted)',
                     color: 'var(--color-text-main)',
                   }}
                 >
                   <div className="mb-1 flex items-center justify-between">
                     <span className="text-[10px] font-semibold uppercase tracking-wider"
-                      style={{ color: isUser ? 'var(--color-brand-orange)' : 'var(--color-status-success)' }}>
+                      style={{ color: isUser ? 'var(--color-brand)' : 'var(--color-status-success)' }}>
                       {isUser ? 'Candidate' : 'Agent'}
                     </span>
                     <span className="font-mono text-[9px]" style={{ color: 'var(--color-text-dimmest)' }}>

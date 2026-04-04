@@ -31,7 +31,7 @@ function relativeTime(ts: number): string {
 }
 
 const STATUS_DOT: Record<string, string> = {
-  active: 'var(--color-brand-orange)',
+  active: 'var(--color-brand)',
   consumed: 'var(--color-status-success)',
   expired: 'var(--color-status-warning)',
   invalid: 'var(--color-status-error)',
@@ -148,7 +148,7 @@ export function AdminLinks({ onNavigate }: AdminLinksProps) {
     }
   }
 
-  const inputClass = 'w-full rounded-sm border bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-[var(--color-brand-orange)] transition-colors';
+  const inputClass = 'w-full rounded-sm border bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-[var(--color-brand)] transition-colors';
   const inputStyle = { borderColor: 'var(--color-border-main)', color: 'var(--color-text-main)' };
 
   return (
@@ -178,7 +178,7 @@ export function AdminLinks({ onNavigate }: AdminLinksProps) {
               type="button"
               onClick={() => { setShowForm((v) => !v); setError(null); }}
               className="flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-[11px] font-semibold"
-              style={{ background: 'var(--color-brand-orange)', color: 'white' }}
+              style={{ background: 'var(--color-brand)', color: 'white' }}
             >
               <Plus size={11} />
               Generate Link
@@ -299,7 +299,7 @@ export function AdminLinks({ onNavigate }: AdminLinksProps) {
                 type="submit"
                 disabled={creating || !promptId || !email.trim()}
                 className="rounded-sm px-4 py-1.5 text-[12px] font-semibold disabled:opacity-40"
-                style={{ background: 'var(--color-brand-orange)', color: 'white' }}
+                style={{ background: 'var(--color-brand)', color: 'white' }}
               >
                 {creating ? 'Generating…' : 'Generate link'}
               </button>
@@ -350,7 +350,7 @@ export function AdminLinks({ onNavigate }: AdminLinksProps) {
                       data-testid={`admin-link-row-${link.id}`}
                       style={{
                         borderTop: i > 0 ? '1px solid var(--color-border-muted)' : undefined,
-                        background: selectedLink?.id === link.id ? 'rgba(232,98,42,0.04)' : undefined,
+                        background: selectedLink?.id === link.id ? 'rgba(56,135,206,0.04)' : undefined,
                       }}
                     >
                       <td className="px-4 py-2">
@@ -384,7 +384,7 @@ export function AdminLinks({ onNavigate }: AdminLinksProps) {
                           <button
                             type="button"
                             className="underline transition-colors"
-                            style={{ color: 'var(--color-brand-orange)' }}
+                            style={{ color: 'var(--color-brand)' }}
                             onClick={() => onNavigate('reviews', link.consumed_session_id!)}
                           >
                             {link.consumed_session_id.slice(0, 8)}…

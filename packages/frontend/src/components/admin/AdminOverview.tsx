@@ -81,7 +81,7 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
             <button
               type="button"
               className="underline"
-              style={{ color: 'var(--color-brand-orange)' }}
+              style={{ color: 'var(--color-brand)' }}
               onClick={() => onNavigate('settings')}
             >
               Settings
@@ -97,7 +97,7 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
     <div className="flex flex-col gap-5 p-5">
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Active Links" value={loading ? '—' : active} icon={Link2} accent="var(--color-brand-orange)" />
+        <StatCard label="Active Links" value={loading ? '—' : active} icon={Link2} accent="var(--color-brand)" />
         <StatCard label="Consumed" value={loading ? '—' : consumed} icon={CheckCircle2} accent="var(--color-status-success)" />
         <StatCard label="Created Today" value={loading ? '—' : today} icon={Clock} />
         <StatCard label="Total Links" value={loading ? '—' : links.length} icon={Activity} />
@@ -126,7 +126,7 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
             className="flex items-center gap-1 text-[11px] transition-colors"
             style={{ color: 'var(--color-text-dim)' }}
             onClick={() => onNavigate('links')}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-brand-orange)'; }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-brand)'; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-text-dim)'; }}
           >
             View all <ArrowRight size={10} />
@@ -161,7 +161,7 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
                           ? 'var(--color-status-warning)'
                           : link.status === 'invalid'
                             ? 'var(--color-status-error)'
-                            : 'var(--color-brand-orange)',
+                            : 'var(--color-brand)',
                   }}
                 />
                 <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: 'var(--color-text-main)' }}>
@@ -179,7 +179,7 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
                     className="shrink-0 text-[11px] underline transition-colors"
                     style={{ color: 'var(--color-text-dim)' }}
                     onClick={() => onNavigate('reviews', link.consumed_session_id!)}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-brand-orange)'; }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-brand)'; }}
                     onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-text-dim)'; }}
                   >
                     Review

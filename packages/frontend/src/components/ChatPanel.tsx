@@ -406,7 +406,7 @@ export function ChatPanel({
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--color-bg-chat)' }}>
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 flex flex-col gap-10 relative">
+      <div className="flex-1 overflow-y-auto px-4 flex flex-col gap-2 relative">
         {messages.length === 0 && !loading && (
           <div
             className="flex-1 flex items-center justify-center text-xs opacity-40 pt-12"
@@ -416,58 +416,77 @@ export function ChatPanel({
           </div>
         )}
 
-        {messages.map((msg) => {
-          const isUser = msg.role === 'user';
-          
-          let displayContent = msg.content;
-          let displayToolActions = msg.tool_actions || [];
-          
-          if (!isUser && msg.content) {
-            const parsed = parseToolUse(msg.content);
-            displayContent = parsed.content || '';
-            if (parsed.tool_actions.length > 0) {
-              displayToolActions = [...displayToolActions, ...parsed.tool_actions];
+        {(() => {
+          const rendered: React.ReactNode[] = [];
+          let currentGroup: { role: 'user' | 'assistant'; messages: ChatMessage[] } | null = null;
+
+          // Helper to group messages
+          for (const msg of messages) {
+            if (!currentGroup || currentGroup.role !== msg.role || msg.role === 'user') {
+              currentGroup = { role: msg.role, messages: [msg] };
+              rendered.push(currentGroup as any); // We'll map this below
+            } else {
+              currentGroup.messages.push(msg);
             }
           }
-          
-          return (
-            <div
-              key={msg.id}
-              className="flex flex-col gap-6 py-1"
-            >
-              {/* Text content */}
-              {isUser ? (
-                <div
-                  className="w-full rounded-[25px] px-8 py-5 text-sm whitespace-pre-wrap break-words border-none shadow-none"
-                  style={{ background: 'var(--color-bg-user-msg)', color: 'var(--color-text-user-msg)' }}
-                  data-testid="user-message"
-                >
-                  {displayContent}
-                </div>
-              ) : (
-                <>
-                  {/* Tool action cards */}
-                  {displayToolActions.length > 0 && (
-                    <div className="w-full" data-testid="tool-actions-container">
-                      {displayToolActions.map((action, i) => (
-                        <ToolActionCard key={i} action={action} />
-                      ))}
-                    </div>
-                  )}
 
-                  {displayContent && (
-                    <div
-                      className="w-full text-sm chat-markdown break-words"
-                      style={{ color: 'var(--color-text-agent-msg)' }}
-                      data-testid="agent-message"
-                      dangerouslySetInnerHTML={{ __html: renderMarkdown(displayContent) }}
-                    />
-                  )}
-                </>
-              )}
-            </div>
-          );
-        })}
+          return (rendered as unknown as Array<{ role: 'user' | 'assistant'; messages: ChatMessage[] }>).map((group, groupIdx) => {
+            const isUser = group.role === 'user';
+            
+            if (isUser) {
+              const msg = group.messages[0]!;
+              return (
+                <div key={msg.id} className="flex flex-col py-0.5">
+                  <div
+                    className="w-full rounded-[18px] px-5 py-3 text-[14px] whitespace-pre-wrap break-words border-none shadow-none"
+                    style={{ background: 'var(--color-bg-user-msg)', color: 'var(--color-text-user-msg)' }}
+                    data-testid="user-message"
+                  >
+                    {msg.content}
+                  </div>
+                </div>
+              );
+            }
+
+            // Assistant group: extract all tool actions and all content
+            const allToolActions: LocalToolAction[] = [];
+            const contentBlocks: string[] = [];
+            
+            for (const msg of group.messages) {
+              let displayContent = msg.content;
+              if (msg.tool_actions) {
+                allToolActions.push(...msg.tool_actions);
+              }
+              
+              if (msg.content) {
+                const parsed = parseToolUse(msg.content);
+                if (parsed.content) contentBlocks.push(parsed.content);
+                if (parsed.tool_actions.length > 0) {
+                  allToolActions.push(...parsed.tool_actions);
+                }
+              }
+            }
+
+            return (
+              <div key={`group-${groupIdx}`} className="flex flex-col gap-1 py-0.5">
+                {allToolActions.length > 0 && (
+                  <div className="w-full px-1" data-testid="tool-actions-container">
+                    <ToolActionCard action={allToolActions} />
+                  </div>
+                )}
+                {contentBlocks.map((content, i) => (
+                  <div
+                    key={i}
+                    className="w-full text-[14px] chat-markdown break-words px-2"
+                    style={{ color: 'var(--color-text-agent-msg)' }}
+                    data-testid="agent-message"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+                  />
+                ))}
+              </div>
+            );
+          });
+        })()}
 
         {loading && (
           <div className="flex items-start gap-2 py-2">

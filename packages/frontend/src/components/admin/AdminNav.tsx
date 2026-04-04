@@ -46,7 +46,7 @@ function NavButton({
       className="flex w-full items-center gap-2.5 rounded-sm py-1.5 pl-2.5 pr-3 text-left text-[13px] transition-colors"
       style={
         active
-          ? { background: 'var(--color-brand-orange)', color: '#ffffff' }
+          ? { background: 'var(--color-brand)', color: '#ffffff' }
           : { color: 'var(--color-text-dim)' }
       }
       onMouseEnter={(e) => {
@@ -100,12 +100,6 @@ export function AdminNav({ section, onNavigate, isDark, onToggleTheme }: AdminNa
         />
         <span className="text-[15px] font-bold tracking-tight" style={{ color: 'var(--color-text-bold)' }}>
           Lintic
-        </span>
-        <span
-          className="ml-auto rounded-sm px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
-          style={{ background: 'rgba(232,98,42,0.15)', color: 'var(--color-brand-orange)' }}
-        >
-          Admin
         </span>
       </div>
 

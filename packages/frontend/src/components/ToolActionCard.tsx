@@ -62,10 +62,12 @@ function SingleToolCard({ call, result }: { call: LocalToolCall; result: LocalTo
   let mainParam = '';
   if (call.name === 'write_file' || call.name === 'read_file') {
     mainParam = (call.input['path'] as string) || '';
-  } else if (call.name === 'run_command') {
+  } else if (call.name === 'run_command' || call.name === 'run_shell_command' || call.name === 'run_command_background') {
     mainParam = (call.input['command'] as string) || '';
-  } else if (call.name === 'search_files') {
+  } else if (call.name === 'search_files' || call.name === 'grep_search') {
     mainParam = (call.input['pattern'] as string) || '';
+  } else if (call.name === 'list_directory') {
+    mainParam = (call.input['dir_path'] as string) || '';
   }
 
   const displayName = call.name
@@ -74,51 +76,47 @@ function SingleToolCard({ call, result }: { call: LocalToolCall; result: LocalTo
     .join(' ');
 
   const getIcon = () => {
-    if (call.name.includes('file')) return <FileCode size={14} />;
-    if (call.name.includes('search')) return <Search size={14} />;
-    if (call.name.includes('command')) return <Terminal size={14} />;
-    return <FileSearch size={14} />;
+    if (call.name.includes('file')) return <FileCode size={13} />;
+    if (call.name.includes('search')) return <Search size={13} />;
+    if (call.name.includes('command') || call.name.includes('shell')) return <Terminal size={13} />;
+    return <FileSearch size={13} />;
   };
 
   return (
-    <div data-testid="tool-action-card" className="mb-4 last:mb-0 flex flex-col">
+    <div data-testid="tool-action-card" className="flex flex-col mb-1 last:mb-0">
       <button
         type="button"
         data-testid="tool-action-toggle"
         onClick={() => setOpen((v) => !v)}
-        className={`w-full flex items-center justify-between px-6 py-3 transition-all duration-200 border border-white/5 z-10 ${
-          open 
-            ? 'bg-[#1A1A1A] rounded-t-[var(--radius-md)] rounded-b-none' 
-            : 'bg-[#141414] hover:bg-[#1A1A1A] rounded-[var(--radius-md)]'
-        }`}
+        className="group w-full flex items-center justify-between py-1 transition-colors"
       >
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="text-white/40 flex items-center shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="text-white/20 group-hover:text-white/40 flex items-center shrink-0 transition-colors">
             {getIcon()}
           </span>
           <div className="flex items-center gap-2 truncate">
-            <span className="text-[13px] font-bold text-white tracking-tight shrink-0">
+            <span className="text-[12px] font-bold text-white/70 group-hover:text-white tracking-tight shrink-0 transition-colors">
               {displayName}:
             </span>
             {mainParam && (
-              <span className="text-[13px] text-white/50 truncate font-medium tracking-tight">
+              <span className="text-[12px] text-white/30 truncate font-medium tracking-tight group-hover:text-white/40">
                 {mainParam}
               </span>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0 ml-2">
+        <div className="flex items-center gap-2 shrink-0 ml-2">
           {isError && (
             <span
               data-testid="tool-action-error-badge"
-              className="text-[11px] text-[var(--color-status-error)] font-bold tracking-tight"
+              className="text-[10px] text-[var(--color-status-error)] font-bold tracking-tight uppercase"
             >
               Error
             </span>
           )}
           <ChevronDown 
-            size={16} 
-            className={`transition-transform duration-300 text-white/20 ${open ? 'rotate-180' : ''}`} 
+            size={13} 
+            className={`transition-transform duration-300 text-white/10 group-hover:text-white/30 ${open ? 'rotate-180' : ''}`} 
           />
         </div>
       </button>
@@ -129,21 +127,21 @@ function SingleToolCard({ call, result }: { call: LocalToolCall; result: LocalTo
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
             className="overflow-hidden"
           >
             <div
               data-testid="tool-action-body"
-              className="p-6 pt-8 rounded-b-[var(--radius-md)] bg-[#0F0F0F] border-x border-b border-white/5 space-y-6"
+              className="pl-6 pr-2 pb-3 space-y-3 opacity-70"
             >
               {/* Detailed Input */}
-              <div className="space-y-4">
+              <div className="space-y-2">
                 {Object.entries(call.input).map(([k, v]) => (
-                  <div key={k} className="space-y-2">
-                    <span className="text-[11px] font-bold tracking-tight text-white/20 px-1 uppercase letter-spacing-widest">
+                  <div key={k} className="space-y-1">
+                    <span className="text-[9px] font-bold tracking-widest text-white/10 px-0.5 uppercase">
                       {k}
                     </span>
-                    <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 font-mono text-[12px] break-all text-white/70 leading-relaxed overflow-hidden">
+                    <div className="font-mono text-[11px] break-all text-white/50 leading-relaxed overflow-hidden px-1">
                       {typeof v === 'string' ? v : JSON.stringify(v, null, 2)}
                     </div>
                   </div>
@@ -152,13 +150,13 @@ function SingleToolCard({ call, result }: { call: LocalToolCall; result: LocalTo
 
               {/* Result Output */}
               {result !== undefined && (
-                <div className="pt-6 border-t border-white/5">
-                  <span className="text-[11px] font-bold tracking-tight text-white/20 block mb-3 px-1 uppercase letter-spacing-widest">
+                <div className="pt-3 border-t border-white/5">
+                  <span className="text-[9px] font-bold tracking-widest text-white/10 block mb-1.5 px-0.5 uppercase">
                     Output
                   </span>
                   <div className="px-1">
-                    {call.name === 'write_file' && !isError ? (
-                      <DiffPreview content={result.output === 'ok' ? (call.input['content'] as string | undefined) ?? '' : result.output} />
+                    {(call.name === 'write_file' || call.name === 'replace') && !isError ? (
+                      <DiffPreview content={result.output === 'ok' || result.output.startsWith('Successfully') ? (call.input['content'] || call.input['new_string'] as string | undefined) ?? '' : result.output} />
                     ) : (
                       <CommandOutput output={result.output} />
                     )}
@@ -173,13 +171,37 @@ function SingleToolCard({ call, result }: { call: LocalToolCall; result: LocalTo
   );
 }
 
-export function ToolActionCard({ action }: { action: LocalToolAction }) {
+export function ToolActionCard({ action }: { action: LocalToolAction | LocalToolAction[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const actions = Array.isArray(action) ? action : [action];
+  
+  // Flatten all tool calls across all actions
+  const allCalls = actions.flatMap(a => a.tool_calls.map(call => ({
+    call,
+    result: a.tool_results.find(r => r.tool_call_id === call.id)
+  })));
+
+  const limit = 3;
+  const hasMore = allCalls.length > limit;
+  const visibleCalls = showAll ? allCalls : allCalls.slice(0, limit);
+
   return (
-    <div className="w-full">
-      {action.tool_calls.map((call) => {
-        const result = action.tool_results.find((r) => r.tool_call_id === call.id);
-        return <SingleToolCard key={call.id} call={call} result={result} />;
-      })}
+    <div className="w-full flex flex-col">
+      {visibleCalls.map(({ call, result }) => (
+        <SingleToolCard key={call.id} call={call} result={result} />
+      ))}
+      
+      {hasMore && (
+        <button
+          type="button"
+          onClick={() => setShowAll(!showAll)}
+          className="group w-full flex items-center py-1 transition-colors"
+        >
+          <span className="text-[12px] text-white/20 group-hover:text-white/40 pl-5">
+            {showAll ? '— show less' : `+ ${allCalls.length - limit} more tool uses`}
+          </span>
+        </button>
+      )}
     </div>
   );
 }

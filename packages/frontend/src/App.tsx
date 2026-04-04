@@ -19,9 +19,10 @@ import { ReviewDashboard } from './components/ReviewDashboard.js';
 import { getReviewSessionId } from './lib/review-replay.js';
 import { AssessmentLinkLoader } from './components/AssessmentLinkLoader.js';
 import { AdminDashboard } from './components/admin/AdminDashboard.js';
+import { saveSession, loadSession, clearSession, validateSession, restoreFiles } from './lib/session-persist.js';
 import type { PromptSummary } from '@lintic/core';
 
-type AppState = 'setup' | 'active';
+type AppState = 'setup' | 'active' | 'resuming';
 const ENABLE_DEV_REVIEW_SHORTCUT = import.meta.env.DEV;
 
 function getAssessmentLinkToken(location: Location): string | null {
@@ -115,6 +116,29 @@ export function App() {
       .catch(() => { });
   }, [reviewSessionId, assessmentToken, adminRoute]);
 
+  // Restore persisted session on page load (assessment sessions only).
+  useEffect(() => {
+    if (assessmentToken || reviewSessionId || adminRoute) return;
+    const saved = loadSession();
+    if (!saved) return;
+
+    setAppState('resuming');
+    void validateSession(saved.sessionId, saved.sessionToken).then((constraints) => {
+      if (!constraints) {
+        clearSession();
+        setAppState('setup');
+        return;
+      }
+      setSessionId(saved.sessionId);
+      setSessionToken(saved.sessionToken);
+      setActivePrompt(saved.prompt);
+      setAgentConfig(undefined);
+      patchConstraints(constraints);
+      setAppState('active');
+      void restoreFiles(saved.sessionId, saved.sessionToken);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSessionReady = useCallback((session: DevSession) => {
     setSessionId(session.sessionId);
     setSessionToken(session.sessionToken);
@@ -188,6 +212,7 @@ export function App() {
             prompt,
           }: { sessionId: string; sessionToken: string; prompt: PromptSummary },
         ) => {
+          saveSession({ sessionId: nextSessionId, sessionToken: nextSessionToken, prompt });
           setSessionId(nextSessionId);
           setSessionToken(nextSessionToken);
           setAgentConfig(undefined);
@@ -197,6 +222,22 @@ export function App() {
           window.history.replaceState({}, '', '/');
         }}
       />
+    );
+  }
+
+  if (appState === 'resuming') {
+    return (
+      <div
+        className="h-screen flex items-center justify-center px-6"
+        style={{ background: 'var(--color-bg-app)' }}
+      >
+        <div
+          className="max-w-md rounded-2xl px-5 py-4 text-sm"
+          style={{ background: 'var(--color-bg-panel)', color: 'var(--color-text-main)' }}
+        >
+          Resuming your session…
+        </div>
+      </div>
     );
   }
 

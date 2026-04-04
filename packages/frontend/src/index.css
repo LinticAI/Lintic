@@ -2,7 +2,7 @@
 
 @theme {
   /* Core Palette */
-  --color-brand-orange: #E8622A;
+  --color-brand: #3887ce;
   --color-brand-yellow: #D97706;
   --color-brand-green: #10B981;
   --color-brand-green-dark: #064E3B;
@@ -118,7 +118,7 @@
 }
 
 .chat-markdown a {
-  @apply text-[var(--color-brand-orange)] underline;
+  @apply text-[var(--color-brand)] underline;
 }
 
 .chat-markdown h1, .chat-markdown h2, .chat-markdown h3, .chat-markdown h4 {
