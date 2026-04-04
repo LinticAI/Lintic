@@ -527,7 +527,7 @@ describe('GET /api/links', () => {
     db.assessmentLinks.set('active-link', {
       id: 'active-link',
       token: 'unused',
-      url: 'http://localhost:3000/assessment?token=active',
+      url: 'http://localhost:3300/assessment?token=active',
       prompt_id: 'missing-prompt',
       candidate_email: 'active@example.com',
       created_at: Date.now(),
@@ -537,7 +537,7 @@ describe('GET /api/links', () => {
     db.assessmentLinks.set('expired-link', {
       id: 'expired-link',
       token: 'unused',
-      url: 'http://localhost:3000/assessment?token=expired',
+      url: 'http://localhost:3300/assessment?token=expired',
       prompt_id: 'test-prompt',
       candidate_email: 'expired@example.com',
       created_at: Date.now() - 10_000,
@@ -547,7 +547,7 @@ describe('GET /api/links', () => {
     db.assessmentLinks.set('consumed-link', {
       id: 'consumed-link',
       token: 'unused',
-      url: 'http://localhost:3000/assessment?token=consumed',
+      url: 'http://localhost:3300/assessment?token=consumed',
       prompt_id: 'test-prompt',
       candidate_email: 'consumed@example.com',
       created_at: Date.now() - 20_000,
@@ -580,7 +580,7 @@ describe('GET /api/links/:id', () => {
     db.assessmentLinks.set('link-1', {
       id: 'link-1',
       token: 'token-1',
-      url: 'http://localhost:3000/assessment?token=token-1',
+      url: 'http://localhost:3300/assessment?token=token-1',
       prompt_id: 'missing-prompt',
       candidate_email: 'candidate@example.com',
       created_at: 1000,

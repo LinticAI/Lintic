@@ -35,6 +35,7 @@ Traditional coding assessments test memorization. Lintic tests AI collaboration 
 
 ```bash
 npm install
+npm run startdev
 npm run build
 npm run typecheck
 npm run lint
@@ -82,7 +83,7 @@ export LINTIC_SECRET_KEY=your-signing-secret # signs assessment JWTs
 docker compose up --build -d
 ```
 
-The app is available at `http://localhost:3000`. `./lintic.yml` is mounted read-only into the container and `./data` persists the SQLite database between restarts.
+The app is available at `http://localhost:3300`. `./lintic.yml` is mounted read-only into the container and `./data` persists the SQLite database between restarts.
 
 **Health check:** `GET /health` returns `{"status":"ok"}`.
 
@@ -137,7 +138,7 @@ psql postgres://lintic:lintic@localhost:5432/lintic -c "select session_id, role,
 npx lintic generate-link --prompt library-api --email candidate@example.com
 
 # REST API
-curl -X POST http://localhost:3000/api/links \
+curl -X POST http://localhost:3300/api/links \
   -H "X-Lintic-Api-Key: $LINTIC_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"prompt_id":"library-api","email":"candidate@example.com"}'

@@ -29,7 +29,7 @@ FROM node:20-bookworm-slim AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=3300
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
@@ -42,6 +42,6 @@ COPY --from=builder /app/packages/backend/package.json ./packages/backend/packag
 COPY --from=builder /app/packages/backend/dist ./packages/backend/dist
 COPY --from=builder /app/packages/frontend/dist ./packages/frontend/dist
 
-EXPOSE 3000
+EXPOSE 3300
 
 CMD ["node", "packages/backend/dist/index.js"]

@@ -101,7 +101,7 @@ function buildBaseUrl(req: Request): string {
   }
 
   const protocol = req.protocol;
-  const host = req.get('host') ?? 'localhost:3000';
+  const host = req.get('host') ?? 'localhost:3300';
   return `${protocol}://${host}`;
 }
 

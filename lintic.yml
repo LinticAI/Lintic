@@ -1,7 +1,7 @@
 agent:
-  provider: groq
+  provider: cerebras
   api_key: ${LINTIC_API_KEY}
-  model: llama-3.3-70b-versatile
+  model: qwen-3-235b-a22b-instruct-2507
 
 constraints:
   max_session_tokens: 50000

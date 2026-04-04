@@ -87,7 +87,7 @@ interface ChatPanelProps {
   constraints: ChatConstraints;
   /** Bearer token for authenticating API requests. */
   sessionToken?: string;
-  /** Backend base URL, e.g. "http://localhost:3000" */
+  /** Backend base URL, e.g. "http://localhost:3300" */
   apiBase?: string;
   /** Called after the agent replies so the parent can update constraint state */
   onConstraintsUpdate?: (updated: Partial<ChatConstraints>) => void;
