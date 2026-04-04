@@ -134,11 +134,11 @@ describe('App prompt display', () => {
     });
   });
 
-  test('renders the admin links dashboard on the admin route', () => {
+  test('renders the admin dashboard on the admin route', () => {
     window.history.replaceState({}, '', '/admin/links');
 
     render(<App />);
 
-    expect(screen.getByTestId('admin-links-dashboard')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-dashboard')).toBeInTheDocument();
   });
 });
