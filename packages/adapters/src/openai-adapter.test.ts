@@ -246,7 +246,13 @@ describe('sendMessage', () => {
     await expect(adapter.sendMessage('hi', makeContext())).rejects.toMatchObject({
       name: 'AdapterError',
       code: 'tool_use_failed',
-      message: expect.stringContaining("failed_generation: <tool-use>{\"name\":\"read_file\"}</tool-use>"),
+    });
+
+    await adapter.sendMessage('hi', makeContext()).catch((error: unknown) => {
+      expect(error).toBeInstanceOf(AdapterError);
+      expect((error as AdapterError).message).toContain(
+        'failed_generation: <tool-use>{"name":"read_file"}</tool-use>',
+      );
     });
     vi.unstubAllGlobals();
   });

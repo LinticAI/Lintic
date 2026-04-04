@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
-import { SQLiteAdapter } from './database.ts';
-import type { CreateSessionConfig } from './database.ts';
+import { SQLiteAdapter } from './database.js';
+import type { CreateSessionConfig } from './database.js';
 import type { Constraint } from './types.js';
 
 const BASE_CONSTRAINT: Constraint = {

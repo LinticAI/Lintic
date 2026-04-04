@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { PostgresAdapter } from './database.ts';
-import type { CreateSessionConfig } from './database.ts';
+import { PostgresAdapter } from './database.js';
+import type { CreateSessionConfig } from './database.js';
 import type { Constraint } from './types.js';
 
 const poolInstances: MockPool[] = [];

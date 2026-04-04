@@ -18,7 +18,7 @@ describe('AdminLinksDashboard', () => {
   });
 
   test('does not fetch admin data until the admin key is submitted', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/prompts') {
         return new Response(JSON.stringify({ prompts }), { status: 200 });
