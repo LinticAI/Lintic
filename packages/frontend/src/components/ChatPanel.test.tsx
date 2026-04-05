@@ -739,4 +739,46 @@ describe('ChatPanel', () => {
     expect(body.message).toBe('Implement the approved plan.');
     expect(body.mode).toBe('build');
   });
+
+  test('switches branches through the custom branch menu', async () => {
+    const onBranchChange = vi.fn();
+
+    render(
+      <ChatPanel
+        sessionId="s1"
+        constraints={defaultConstraints}
+        branches={[
+          { id: 'main', name: 'main', created_at: 1000 },
+          { id: 'feature-a', name: 'feature-a', created_at: 2000 },
+        ]}
+        activeBranchId="main"
+        onBranchChange={onBranchChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('branch-select'));
+    fireEvent.click(screen.getByRole('option', { name: 'feature-a' }));
+
+    expect(onBranchChange).toHaveBeenCalledWith('feature-a');
+  });
+
+  test('opens the inline checkpoint editor and saves a named checkpoint', async () => {
+    const onSaveCheckpoint = vi.fn();
+
+    render(
+      <ChatPanel
+        sessionId="s1"
+        constraints={defaultConstraints}
+        onSaveCheckpoint={onSaveCheckpoint}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('save-checkpoint'));
+    fireEvent.change(await screen.findByTestId('checkpoint-name-input'), {
+      target: { value: 'Checkpoint Alpha' },
+    });
+    fireEvent.click(screen.getByTestId('confirm-checkpoint'));
+
+    expect(onSaveCheckpoint).toHaveBeenCalledWith('Checkpoint Alpha');
+  });
 });

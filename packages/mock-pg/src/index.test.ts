@@ -315,4 +315,98 @@ describe('Pool', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  test('exports and imports serializable pool state', async () => {
+    const source = createPool({ name: 'source-db' });
+    const target = createPool({ name: 'target-db' });
+
+    try {
+      await source.query('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+      await source.query('CREATE INDEX users_email_idx ON users (email)');
+      await source.query("INSERT INTO users (id, email) VALUES (1, 'alice@example.com'), (2, 'bob@example.com')");
+      await source.query('SELECT * FROM users WHERE email = $1', ['alice@example.com']);
+
+      const exported = source.exportState();
+      await target.importState(exported);
+
+      expect(await target.query('SELECT * FROM users ORDER BY id ASC')).toEqual({
+        rows: [
+          { id: 1, email: 'alice@example.com' },
+          { id: 2, email: 'bob@example.com' },
+        ],
+        rowCount: 2,
+      });
+      expect(target.exportState().indexes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'users_email_idx', table: 'users', kind: 'index' }),
+          expect.objectContaining({ name: 'users_pkey', table: 'users', kind: 'primary' }),
+        ]),
+      );
+      expect(target.getRecentQueries()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ operation: 'select', table: 'users' }),
+        ]),
+      );
+    } finally {
+      await source.end();
+      await target.end();
+    }
+  });
+
+  test('hydrates pool state from a bootstrap manifest when bridging is enabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lintic-mock-pg-bootstrap-'));
+    const statePath = join(root, 'state.json');
+    const commandsDir = join(root, 'commands');
+    const responsesDir = join(root, 'responses');
+    const bootstrapPath = join(root, 'bootstrap.json');
+
+    await writeFile(
+      bootstrapPath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: Date.now(),
+        pools: [{
+          id: 'seed-pool',
+          name: 'seed-db',
+          tables: [{
+            name: 'users',
+            columns: [
+              { name: 'id', type: 'INTEGER', primaryKey: true },
+              { name: 'email', type: 'TEXT', primaryKey: false },
+            ],
+            rows: [{ id: 1, email: 'alice@example.com' }],
+          }],
+          indexes: [
+            { name: 'users_pkey', table: 'users', columns: ['id'], kind: 'primary' },
+          ],
+          recentQueries: [],
+        }],
+      }),
+      'utf-8',
+    );
+
+    const pool = new Pool({
+      name: 'seed-db',
+      bridge: {
+        statePath,
+        commandsDir,
+        responsesDir,
+        pollMs: 25,
+      },
+    });
+
+    try {
+      await waitFor(async () => {
+        const result = await pool.query('SELECT * FROM users');
+        expect(result.rows).toEqual([{ id: 1, email: 'alice@example.com' }]);
+        return result;
+      });
+
+      const rawBootstrap = await readFile(bootstrapPath, 'utf-8');
+      expect(JSON.parse(rawBootstrap)).toMatchObject({ pools: [] });
+    } finally {
+      await pool.end();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

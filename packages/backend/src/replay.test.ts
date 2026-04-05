@@ -19,6 +19,12 @@ import type {
   ReplayEventType,
   Config,
   Constraint,
+  SessionBranch,
+  WorkspaceSnapshot,
+  WorkspaceSnapshotKind,
+  SnapshotFile,
+  MockPgPoolExport,
+  WorkspaceSection,
 } from '@lintic/core';
 import { createApp } from './app.js';
 
@@ -34,10 +40,39 @@ const BASE_CONSTRAINT: Constraint = {
 
 class FakeDb implements DatabaseAdapter {
   sessions = new Map<string, Session & { token: string }>();
+  branches = new Map<string, SessionBranch[]>();
   messageStore = new Map<string, StoredMessage[]>();
   replayStore = new Map<string, StoredReplayEvent[]>();
+  workspaceSnapshots = new Map<string, WorkspaceSnapshot[]>();
   assessmentLinks = new Map<string, AssessmentLinkRecord>();
+  usedAssessmentLinks = new Map<string, string>();
+  turnSequences = new Map<string, number>();
   nextMsgId = 1;
+  nextReplayId = 1;
+
+  private branchKey(sessionId: string, branchId: string): string {
+    return `${sessionId}:${branchId}`;
+  }
+
+  private getOrCreateMainBranch(sessionId: string): SessionBranch {
+    const existing = this.branches.get(sessionId)?.find((branch) => branch.name === 'main');
+    if (existing) {
+      return existing;
+    }
+
+    const branch: SessionBranch = {
+      id: 'main',
+      session_id: sessionId,
+      name: 'main',
+      created_at: Date.now(),
+    };
+    this.branches.set(sessionId, [branch]);
+    return branch;
+  }
+
+  private getSnapshotKey(sessionId: string, branchId: string): string {
+    return `${sessionId}:${branchId}`;
+  }
 
   createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
     const id = `sess-${this.sessions.size + 1}`;
@@ -54,8 +89,10 @@ class FakeDb implements DatabaseAdapter {
       interactions_used: 0,
     };
     this.sessions.set(id, session);
-    this.messageStore.set(id, []);
-    this.replayStore.set(id, []);
+    const mainBranch = this.getOrCreateMainBranch(id);
+    this.messageStore.set(this.branchKey(id, mainBranch.id), []);
+    this.replayStore.set(this.branchKey(id, mainBranch.id), []);
+    this.workspaceSnapshots.set(this.getSnapshotKey(id, mainBranch.id), []);
     return Promise.resolve({ id, token });
   }
 
@@ -82,15 +119,108 @@ class FakeDb implements DatabaseAdapter {
     return Promise.resolve(this.sessions.get(id)?.token ?? null);
   }
 
-  addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void> {
-    const msgs = this.messageStore.get(sessionId) ?? [];
-    msgs.push({ id: this.nextMsgId++, session_id: sessionId, role, content, token_count: tokenCount, created_at: Date.now() });
-    this.messageStore.set(sessionId, msgs);
+  getMainBranch(sessionId: string): Promise<SessionBranch | null> {
+    return Promise.resolve(this.getOrCreateMainBranch(sessionId));
+  }
+
+  getBranch(sessionId: string, branchId: string): Promise<SessionBranch | null> {
+    return Promise.resolve(this.branches.get(sessionId)?.find((branch) => branch.id === branchId) ?? null);
+  }
+
+  listBranches(sessionId: string): Promise<SessionBranch[]> {
+    return Promise.resolve(this.branches.get(sessionId) ?? [this.getOrCreateMainBranch(sessionId)]);
+  }
+
+  createBranch(config: {
+    session_id: string;
+    name: string;
+    parent_branch_id: string;
+    forked_from_sequence: number;
+  }): Promise<SessionBranch> {
+    const branch: SessionBranch = {
+      id: `${config.name}-${(this.branches.get(config.session_id)?.length ?? 0) + 1}`,
+      session_id: config.session_id,
+      name: config.name,
+      parent_branch_id: config.parent_branch_id,
+      forked_from_sequence: config.forked_from_sequence,
+      created_at: Date.now(),
+    };
+    const branches = this.branches.get(config.session_id) ?? [this.getOrCreateMainBranch(config.session_id)];
+    this.branches.set(config.session_id, [...branches, branch]);
+
+    const parentMessages = this.messageStore.get(this.branchKey(config.session_id, config.parent_branch_id)) ?? [];
+    this.messageStore.set(
+      this.branchKey(config.session_id, branch.id),
+      parentMessages
+        .filter((message) => message.turn_sequence !== null && (message.turn_sequence ?? 0) <= config.forked_from_sequence)
+        .map((message) => ({ ...message, branch_id: branch.id })),
+    );
+
+    const parentEvents = this.replayStore.get(this.branchKey(config.session_id, config.parent_branch_id)) ?? [];
+    this.replayStore.set(
+      this.branchKey(config.session_id, branch.id),
+      parentEvents
+        .filter((event) => event.turn_sequence !== null && (event.turn_sequence ?? 0) <= config.forked_from_sequence)
+        .map((event) => ({ ...event, branch_id: branch.id })),
+    );
+
+    const parentSnapshots = this.workspaceSnapshots.get(this.getSnapshotKey(config.session_id, config.parent_branch_id)) ?? [];
+    this.workspaceSnapshots.set(
+      this.getSnapshotKey(config.session_id, branch.id),
+      parentSnapshots.length > 0
+        ? [{
+            ...parentSnapshots[parentSnapshots.length - 1]!,
+            id: `${branch.id}-draft`,
+            branch_id: branch.id,
+            kind: 'draft',
+            created_at: Date.now(),
+          }]
+        : [],
+    );
+
+    return Promise.resolve(branch);
+  }
+
+  allocateTurnSequence(sessionId: string): Promise<number> {
+    const next = (this.turnSequences.get(sessionId) ?? 0) + 1;
+    this.turnSequences.set(sessionId, next);
+    return Promise.resolve(next);
+  }
+
+  addBranchMessage(
+    sessionId: string,
+    branchId: string,
+    turnSequence: number | null,
+    role: MessageRole,
+    content: string,
+    tokenCount: number,
+  ): Promise<void> {
+    const key = this.branchKey(sessionId, branchId);
+    const msgs = this.messageStore.get(key) ?? [];
+    msgs.push({
+      id: this.nextMsgId++,
+      session_id: sessionId,
+      branch_id: branchId,
+      turn_sequence: turnSequence,
+      role,
+      content,
+      token_count: tokenCount,
+      created_at: Date.now(),
+    });
+    this.messageStore.set(key, msgs);
     return Promise.resolve();
   }
 
+  addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void> {
+    return this.addBranchMessage(sessionId, 'main', null, role, content, tokenCount);
+  }
+
+  getBranchMessages(sessionId: string, branchId: string): Promise<StoredMessage[]> {
+    return Promise.resolve(this.messageStore.get(this.branchKey(sessionId, branchId)) ?? []);
+  }
+
   getMessages(sessionId: string): Promise<StoredMessage[]> {
-    return Promise.resolve(this.messageStore.get(sessionId) ?? []);
+    return this.getBranchMessages(sessionId, 'main');
   }
 
   closeSession(id: string): Promise<void> {
@@ -136,19 +266,123 @@ class FakeDb implements DatabaseAdapter {
     return Promise.resolve();
   }
 
-  addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
-    const events = this.replayStore.get(sessionId) ?? [];
-    events.push({ id: events.length + 1, session_id: sessionId, type, timestamp, payload });
-    this.replayStore.set(sessionId, events);
+  addBranchReplayEvent(
+    sessionId: string,
+    branchId: string,
+    turnSequence: number | null,
+    type: ReplayEventType,
+    timestamp: number,
+    payload: unknown,
+  ): Promise<void> {
+    const key = this.branchKey(sessionId, branchId);
+    const events = this.replayStore.get(key) ?? [];
+    events.push({
+      id: this.nextReplayId++,
+      session_id: sessionId,
+      branch_id: branchId,
+      turn_sequence: turnSequence,
+      type,
+      timestamp,
+      payload,
+    });
+    this.replayStore.set(key, events);
     return Promise.resolve();
   }
 
+  addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
+    return this.addBranchReplayEvent(sessionId, 'main', null, type, timestamp, payload);
+  }
+
+  getBranchReplayEvents(sessionId: string, branchId: string): Promise<StoredReplayEvent[]> {
+    return Promise.resolve(this.replayStore.get(this.branchKey(sessionId, branchId)) ?? []);
+  }
+
   getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
-    return Promise.resolve(this.replayStore.get(sessionId) ?? []);
+    return this.getBranchReplayEvents(sessionId, 'main');
+  }
+
+  upsertWorkspaceSnapshot(input: {
+    session_id: string;
+    branch_id: string;
+    kind: WorkspaceSnapshotKind;
+    turn_sequence?: number;
+    label?: string;
+    active_path?: string;
+    workspace_section?: WorkspaceSection;
+    filesystem: SnapshotFile[];
+    mock_pg: MockPgPoolExport[];
+  }): Promise<WorkspaceSnapshot> {
+    const key = this.getSnapshotKey(input.session_id, input.branch_id);
+    const snapshots = this.workspaceSnapshots.get(key) ?? [];
+    if (input.kind === 'draft') {
+      const existingIndex = snapshots.findIndex((snapshot) => snapshot.kind === 'draft');
+      if (existingIndex >= 0) {
+        const snapshot: WorkspaceSnapshot = {
+          id: snapshots[existingIndex]!.id,
+          session_id: input.session_id,
+          branch_id: input.branch_id,
+          kind: input.kind,
+          created_at: Date.now(),
+          filesystem: input.filesystem,
+          mock_pg: input.mock_pg,
+          ...(input.turn_sequence !== undefined ? { turn_sequence: input.turn_sequence } : {}),
+          ...(input.label ? { label: input.label } : {}),
+          ...(input.active_path ? { active_path: input.active_path } : {}),
+          ...(input.workspace_section ? { workspace_section: input.workspace_section } : {}),
+        };
+        snapshots[existingIndex] = snapshot;
+        this.workspaceSnapshots.set(key, snapshots);
+        return Promise.resolve(snapshot);
+      }
+    }
+    return this.createWorkspaceSnapshot(input);
+  }
+
+  createWorkspaceSnapshot(input: {
+    session_id: string;
+    branch_id: string;
+    kind: WorkspaceSnapshotKind;
+    turn_sequence?: number;
+    label?: string;
+    active_path?: string;
+    workspace_section?: WorkspaceSection;
+    filesystem: SnapshotFile[];
+    mock_pg: MockPgPoolExport[];
+  }): Promise<WorkspaceSnapshot> {
+    const key = this.getSnapshotKey(input.session_id, input.branch_id);
+    const snapshots = this.workspaceSnapshots.get(key) ?? [];
+    const snapshot: WorkspaceSnapshot = {
+      id: `${key}:${input.kind}:${snapshots.length + 1}`,
+      session_id: input.session_id,
+      branch_id: input.branch_id,
+      kind: input.kind,
+      created_at: Date.now(),
+      filesystem: input.filesystem,
+      mock_pg: input.mock_pg,
+      ...(input.turn_sequence !== undefined ? { turn_sequence: input.turn_sequence } : {}),
+      ...(input.label ? { label: input.label } : {}),
+      ...(input.active_path ? { active_path: input.active_path } : {}),
+      ...(input.workspace_section ? { workspace_section: input.workspace_section } : {}),
+    };
+    this.workspaceSnapshots.set(key, [...snapshots, snapshot]);
+    return Promise.resolve(snapshot);
+  }
+
+  getWorkspaceSnapshot(
+    sessionId: string,
+    branchId: string,
+    options: { kind?: WorkspaceSnapshotKind; turn_sequence?: number } = {},
+  ): Promise<WorkspaceSnapshot | null> {
+    const snapshots = this.workspaceSnapshots.get(this.getSnapshotKey(sessionId, branchId)) ?? [];
+    const filtered = snapshots.filter((snapshot) => (
+      (options.kind === undefined || snapshot.kind === options.kind)
+      && (options.turn_sequence === undefined || snapshot.turn_sequence === options.turn_sequence)
+    ));
+    return Promise.resolve(filtered.at(-1) ?? null);
   }
 
   markAssessmentLinkUsed(linkId: string, _sessionId: string): Promise<boolean> {
-    if (this.replayStore.has(`link:${linkId}`)) {
+    if (this.usedAssessmentLinks.has(linkId)) {
       return Promise.resolve(false);
     }
     const link = this.assessmentLinks.get(linkId);
@@ -159,17 +393,16 @@ class FakeDb implements DatabaseAdapter {
         consumed_at: Date.now(),
       });
     }
-    this.replayStore.set(`link:${linkId}`, [{ id: 0, session_id: _sessionId, type: 'message', timestamp: 0, payload: null }]);
+    this.usedAssessmentLinks.set(linkId, _sessionId);
     return Promise.resolve(true);
   }
 
   isAssessmentLinkUsed(linkId: string): Promise<boolean> {
-    return Promise.resolve(this.replayStore.has(`link:${linkId}`));
+    return Promise.resolve(this.usedAssessmentLinks.has(linkId));
   }
 
   getAssessmentLinkSessionId(linkId: string): Promise<string | null> {
-    const events = this.replayStore.get(`link:${linkId}`);
-    return Promise.resolve(events?.[0]?.session_id ?? null);
+    return Promise.resolve(this.usedAssessmentLinks.get(linkId) ?? null);
   }
 }
 

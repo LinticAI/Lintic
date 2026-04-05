@@ -13,7 +13,14 @@ import { Toast } from './components/Toast.js';
 import type { ToastMessage } from './components/Toast.js';
 import { useConstraintTimer } from './lib/useConstraintTimer.js';
 import { ToolExecutor } from './lib/tool-executor.js';
-import { getWebContainer, readFile, writeFile } from './lib/webcontainer.js';
+import {
+  captureWorkspaceSnapshot,
+  getWebContainer,
+  readFile,
+  readMockPgExportState,
+  watchFiles,
+  writeFile,
+} from './lib/webcontainer.js';
 import type { WebContainer } from '@webcontainer/api';
 import type { LocalToolCall, LocalToolResult } from './components/ToolActionCard.js';
 import type { TerminalHandle } from './components/Terminal.js';
@@ -28,12 +35,14 @@ import {
   validateSession,
   restoreFiles,
   type AgentSummary,
+  type PersistedBranchSummary,
+  type RestoredWorkspaceState,
   type SessionSummaryStats,
 } from './lib/session-persist.js';
 import type { PromptSummary } from '@lintic/core';
 import { AssessmentSubmittedModal } from './components/AssessmentSubmittedModal.js';
 
-type AppState = 'setup' | 'active' | 'resuming' | 'submitted';
+type AppState = 'setup' | 'active' | 'submitted';
 const ENABLE_DEV_REVIEW_SHORTCUT = import.meta.env.DEV;
 
 function getAssessmentLinkToken(location: Location): string | null {
@@ -68,7 +77,10 @@ export function App() {
   const [agentSummary, setAgentSummary] = useState<AgentSummary | null>(null);
   const [agentMode, setAgentMode] = useState<AgentMode>('build');
   const [activePrompt, setActivePrompt] = useState<PromptSummary | null>(null);
+  const [branches, setBranches] = useState<PersistedBranchSummary[]>([]);
+  const [activeBranchId, setActiveBranchId] = useState<string | null>(null);
   const [fileToOpen, setFileToOpen] = useState<string | null>(null);
+  const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [latestPlanPath, setLatestPlanPath] = useState<string | null>(null);
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState<WorkspaceSection>('code');
   const wcRef = useRef<WebContainer | null>(null);
@@ -80,6 +92,54 @@ export function App() {
   const [submittingTask, setSubmittingTask] = useState(false);
   const [submittedStats, setSubmittedStats] = useState<SessionSummaryStats | null>(null);
   const [submitConfirmationOpen, setSubmitConfirmationOpen] = useState(false);
+  const [bootstrappingSession, setBootstrappingSession] = useState(false);
+  const snapshotTimerRef = useRef<number | null>(null);
+  const hasAttemptedSavedSessionRestoreRef = useRef(false);
+  const latestConsumedAssessmentSessionRef = useRef<string | null>(null);
+  const restoringBranchIdRef = useRef<string | null>(null);
+
+  const applyRestoredWorkspaceState = useCallback((restored: RestoredWorkspaceState | null) => {
+    if (!restored) {
+      return;
+    }
+    if (restored.workspaceSection) {
+      setActiveWorkspaceSection(restored.workspaceSection);
+    }
+    if (restored.activePath) {
+      setFileToOpen(`${restored.activePath}-${Date.now()}`);
+    }
+  }, []);
+
+  const snapshotWorkspace = useCallback(async (
+    kind: 'draft' | 'turn',
+    options: { turnSequence?: number } = {},
+  ) => {
+    if (!sessionId || !sessionToken || !activeBranchId || appState !== 'active') {
+      return;
+    }
+
+    const [filesystem, mockPg] = await Promise.all([
+      captureWorkspaceSnapshot('/'),
+      readMockPgExportState(),
+    ]);
+
+    await fetch(`/api/sessions/${sessionId}/workspace`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        branch_id: activeBranchId,
+        kind,
+        ...(options.turnSequence !== undefined ? { turn_sequence: options.turnSequence } : {}),
+        ...(activeFilePath ? { active_path: activeFilePath } : {}),
+        workspace_section: activeWorkspaceSection,
+        filesystem,
+        mock_pg: mockPg,
+      }),
+    });
+  }, [activeBranchId, activeFilePath, activeWorkspaceSection, appState, sessionId, sessionToken]);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -138,13 +198,17 @@ export function App() {
   // Restore persisted session on page load (assessment sessions only).
   useEffect(() => {
     if (assessmentToken || reviewSessionId || adminRoute) return;
+    if (hasAttemptedSavedSessionRestoreRef.current) return;
+    hasAttemptedSavedSessionRestoreRef.current = true;
+
     const saved = loadSession();
     if (!saved) return;
 
-    setAppState('resuming');
+    setBootstrappingSession(true);
     void validateSession(saved.sessionId, saved.sessionToken).then((validation) => {
       if (!validation) {
         clearSession();
+        setBootstrappingSession(false);
         setAppState('setup');
         return;
       }
@@ -153,9 +217,65 @@ export function App() {
       setActivePrompt(saved.prompt);
       setAgentConfig(undefined);
       setAgentSummary(validation.agent ?? null);
+      setBranches(validation.branches ?? (validation.branch ? [validation.branch] : []));
+      setActiveBranchId(saved.branchId ?? validation.branch?.id ?? validation.branches?.[0]?.id ?? null);
       setAgentMode('build');
       setLatestPlanPath(null);
       setSubmitConfirmationOpen(false);
+      if (validation.status === 'submitted') {
+        setSubmittedStats(validation.stats);
+        setBootstrappingSession(false);
+        setAppState('submitted');
+        return;
+      }
+      patchConstraints(validation.constraints);
+      setSubmittedStats(null);
+      setAppState('active');
+      void restoreFiles(
+        saved.sessionId,
+        saved.sessionToken,
+        saved.branchId ?? validation.branch?.id ?? validation.branches?.[0]?.id,
+      )
+        .then(applyRestoredWorkspaceState)
+        .finally(() => {
+          setBootstrappingSession(false);
+        });
+    });
+  }, [applyRestoredWorkspaceState, patchConstraints]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSessionReady = useCallback((session: DevSession) => {
+    const optimisticBranch: PersistedBranchSummary = {
+      id: 'main',
+      name: 'main',
+      created_at: Date.now(),
+    };
+    setSessionId(session.sessionId);
+    setSessionToken(session.sessionToken);
+    setAgentConfig(session.agentConfig);
+    setAgentSummary({ provider: session.agentConfig.provider, model: session.agentConfig.model });
+    setAgentMode('build');
+    setActivePrompt(session.prompt);
+    setBranches([optimisticBranch]);
+    setActiveBranchId(optimisticBranch.id);
+    setLatestPlanPath(null);
+    setActiveWorkspaceSection('code');
+    setSubmittedStats(null);
+    setSubmitConfirmationOpen(false);
+    setAppState('active');
+    void validateSession(session.sessionId, session.sessionToken).then((validation) => {
+      if (!validation) {
+        clearSession();
+        setSessionId(null);
+        setSessionToken(undefined);
+        setActivePrompt(null);
+        setAgentSummary(null);
+        setAppState('setup');
+        return;
+      }
+      setAgentSummary(validation.agent ?? null);
+      setBranches(validation.branches ?? (validation.branch ? [validation.branch] : []));
+      const nextBranchId = validation.branch?.id ?? validation.branches?.[0]?.id ?? optimisticBranch.id;
+      setActiveBranchId(nextBranchId);
       if (validation.status === 'submitted') {
         setSubmittedStats(validation.stats);
         setAppState('submitted');
@@ -163,24 +283,127 @@ export function App() {
       }
       patchConstraints(validation.constraints);
       setSubmittedStats(null);
-      setAppState('active');
-      void restoreFiles(saved.sessionId, saved.sessionToken);
+      void restoreFiles(session.sessionId, session.sessionToken, nextBranchId ?? undefined).then(applyRestoredWorkspaceState);
     });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [applyRestoredWorkspaceState, patchConstraints]);
 
-  const handleSessionReady = useCallback((session: DevSession) => {
-    setSessionId(session.sessionId);
-    setSessionToken(session.sessionToken);
-    setAgentConfig(session.agentConfig);
-    setAgentSummary({ provider: session.agentConfig.provider, model: session.agentConfig.model });
-    setAgentMode('build');
-    setActivePrompt(session.prompt);
-    setLatestPlanPath(null);
-    setActiveWorkspaceSection('code');
-    setSubmittedStats(null);
-    setSubmitConfirmationOpen(false);
-    setAppState('active');
-  }, []);
+  useEffect(() => {
+    if (!sessionId || !sessionToken || !activePrompt) {
+      return;
+    }
+    saveSession({
+      sessionId,
+      sessionToken,
+      prompt: activePrompt,
+      ...(activeBranchId ? { branchId: activeBranchId } : {}),
+    });
+  }, [activeBranchId, activePrompt, sessionId, sessionToken]);
+
+  useEffect(() => {
+    if (!sessionId || !sessionToken || !activeBranchId || appState !== 'active') {
+      return;
+    }
+
+    const scheduleSnapshot = () => {
+      if (snapshotTimerRef.current !== null) {
+        window.clearTimeout(snapshotTimerRef.current);
+      }
+      snapshotTimerRef.current = window.setTimeout(() => {
+        void snapshotWorkspace('draft');
+      }, 1000);
+    };
+
+    let stopWatch: (() => void) | undefined;
+    void watchFiles('/', (_event, filename) => {
+      const changedPath = typeof filename === 'string' ? filename : '';
+      if (!changedPath) {
+        return;
+      }
+      scheduleSnapshot();
+    }).then((stop) => {
+      stopWatch = stop;
+    });
+
+    const handleBeforeUnload = () => {
+      void snapshotWorkspace('draft');
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      if (snapshotTimerRef.current !== null) {
+        window.clearTimeout(snapshotTimerRef.current);
+        snapshotTimerRef.current = null;
+      }
+      stopWatch?.();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [activeBranchId, appState, sessionId, sessionToken, snapshotWorkspace]);
+
+  const handleBranchChange = useCallback((branchId: string) => {
+    if (
+      !sessionId ||
+      !sessionToken ||
+      branchId === activeBranchId ||
+      restoringBranchIdRef.current === branchId
+    ) {
+      return;
+    }
+
+    restoringBranchIdRef.current = branchId;
+    setActiveBranchId(branchId);
+    void restoreFiles(sessionId, sessionToken, branchId)
+      .then((restored) => {
+        applyRestoredWorkspaceState(restored);
+      })
+      .finally(() => {
+        restoringBranchIdRef.current = null;
+      });
+  }, [activeBranchId, applyRestoredWorkspaceState, sessionId, sessionToken]);
+
+  const handleSaveCheckpoint = useCallback(async (label: string) => {
+    if (!sessionId || !sessionToken || !activeBranchId) {
+      return;
+    }
+    await snapshotWorkspace('draft');
+    await fetch(`/api/sessions/${sessionId}/checkpoints`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        branch_id: activeBranchId,
+        label,
+      }),
+    });
+  }, [activeBranchId, sessionId, sessionToken, snapshotWorkspace]);
+
+  const handleCreateBranch = useCallback(async (name: string, turnSequence: number) => {
+    if (!sessionId || !sessionToken || !activeBranchId) {
+      return;
+    }
+    const response = await fetch(`/api/sessions/${sessionId}/branches`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        branch_id: activeBranchId,
+        name,
+        forked_from_sequence: turnSequence,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to create branch');
+    }
+    const data = await response.json() as {
+      branch: PersistedBranchSummary;
+      branches: PersistedBranchSummary[];
+    };
+    setBranches(data.branches);
+    handleBranchChange(data.branch.id);
+  }, [activeBranchId, handleBranchChange, sessionId, sessionToken]);
 
   const handleExecuteTools = useCallback(
     async (calls: LocalToolCall[]): Promise<LocalToolResult[]> => {
@@ -317,6 +540,12 @@ export function App() {
             agent,
           }: { sessionId: string; sessionToken: string; prompt: PromptSummary; agent?: AgentSummary },
         ) => {
+          const consumedKey = `${nextSessionId}:${nextSessionToken}`;
+          if (latestConsumedAssessmentSessionRef.current === consumedKey) {
+            return;
+          }
+          latestConsumedAssessmentSessionRef.current = consumedKey;
+
           saveSession({ sessionId: nextSessionId, sessionToken: nextSessionToken, prompt });
           setSessionId(nextSessionId);
           setSessionToken(nextSessionToken);
@@ -324,10 +553,12 @@ export function App() {
           setAgentSummary(agent ?? null);
           setAgentMode('build');
           setActivePrompt(prompt);
+          setBranches([]);
+          setActiveBranchId(null);
           setLatestPlanPath(null);
           setAssessmentToken(null);
           window.history.replaceState({}, '', '/');
-          setAppState('resuming');
+          setBootstrappingSession(true);
           void validateSession(nextSessionId, nextSessionToken).then((validation) => {
             if (!validation) {
               clearSession();
@@ -335,27 +566,41 @@ export function App() {
               setSessionToken(undefined);
               setActivePrompt(null);
               setAgentSummary(null);
+              setBootstrappingSession(false);
               setAppState('setup');
               return;
             }
             if (validation.status === 'submitted') {
               setAgentSummary(validation.agent ?? null);
+              setBranches(validation.branches ?? (validation.branch ? [validation.branch] : []));
+              setActiveBranchId(validation.branch?.id ?? validation.branches?.[0]?.id ?? null);
               setSubmittedStats(validation.stats);
+              setBootstrappingSession(false);
               setAppState('submitted');
               return;
             }
             setAgentSummary(validation.agent ?? null);
+            setBranches(validation.branches ?? (validation.branch ? [validation.branch] : []));
+            setActiveBranchId(validation.branch?.id ?? validation.branches?.[0]?.id ?? null);
             patchConstraints(validation.constraints);
             setSubmittedStats(null);
             setAppState('active');
-            void restoreFiles(nextSessionId, nextSessionToken);
+            void restoreFiles(
+              nextSessionId,
+              nextSessionToken,
+              validation.branch?.id ?? validation.branches?.[0]?.id,
+            )
+              .then(applyRestoredWorkspaceState)
+              .finally(() => {
+                setBootstrappingSession(false);
+              });
           });
         }}
       />
     );
   }
 
-  if (appState === 'resuming') {
+  if (bootstrappingSession) {
     return (
       <div
         className="h-screen flex items-center justify-center px-6"
@@ -414,7 +659,11 @@ export function App() {
             left={
               <div className="h-full">
                 <div className={activeWorkspaceSection === 'code' ? 'h-full' : 'hidden'}>
-                  <IdePanel terminalRef={terminalRef} requestOpenFile={fileToOpen} />
+                  <IdePanel
+                    terminalRef={terminalRef}
+                    requestOpenFile={fileToOpen}
+                    onActiveFileChange={setActiveFilePath}
+                  />
                 </div>
                 <div className={activeWorkspaceSection === 'database' ? 'h-full' : 'hidden'}>
                   <DatabasePanel onOpenSetupFile={handleOpenWorkspaceFile} />
@@ -440,6 +689,14 @@ export function App() {
                 latestPlanPath={latestPlanPath}
                 onPlanGenerated={handlePlanGenerated}
                 onApprovePlan={handleApprovePlan}
+                branches={branches}
+                activeBranchId={activeBranchId}
+                onBranchChange={handleBranchChange}
+                onSaveCheckpoint={handleSaveCheckpoint}
+                onCreateBranch={handleCreateBranch}
+                onTurnComplete={(turnSequence) => {
+                  void snapshotWorkspace('turn', { turnSequence });
+                }}
                 onExecuteTools={handleExecuteTools}
                 onStopTools={handleStopTools}
                 constraints={{

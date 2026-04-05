@@ -8,10 +8,15 @@ import {
   ChevronDown, 
   Square, 
   MessageSquare,
-  AlertCircle
+  AlertCircle,
+  Bookmark,
+  Check,
+  X
 } from 'lucide-react';
 import { ToolActionCard } from './ToolActionCard.js';
 import type { LocalToolAction, LocalToolCall, LocalToolResult } from './ToolActionCard.js';
+import type { PersistedBranchSummary } from '../lib/session-persist.js';
+import { DropdownMenu, DropdownTriggerLabel } from './DropdownMenu.js';
 
 export type AgentMode = 'build' | 'plan';
 
@@ -23,6 +28,7 @@ export interface ChatMessage {
   tool_actions?: LocalToolAction[];
   /** Unix timestamp in ms */
   timestamp: number;
+  turnSequence?: number | null;
 }
 
 export interface ChatConstraints {
@@ -46,12 +52,14 @@ interface SSEDonePayload {
   tool_actions: Array<{ description?: string | null; tool_calls: LocalToolCall[]; tool_results: LocalToolResult[] }>;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   constraints_remaining: { tokens_remaining: number; interactions_remaining: number; seconds_remaining: number };
+  turn_sequence?: number;
 }
 
 interface SSEToolCallsPayload {
   request_id: string;
   description?: string | null;
   tool_calls: LocalToolCall[];
+  turn_sequence?: number;
 }
 
 /** Parse SSE events from a fetch ReadableStream. Yields { event, data } for each complete event block. */
@@ -108,6 +116,12 @@ interface ChatPanelProps {
   onPlanGenerated?: (path: string) => void;
   onApprovePlan?: (path: string) => Promise<string>;
   modelLabel?: string;
+  branches?: PersistedBranchSummary[];
+  activeBranchId?: string | null;
+  onBranchChange?: (branchId: string) => void;
+  onSaveCheckpoint?: (label: string) => Promise<void> | void;
+  onCreateBranch?: (name: string, turnSequence: number) => Promise<void> | void;
+  onTurnComplete?: (turnSequence: number) => void;
 }
 
 function generateId() {
@@ -254,6 +268,12 @@ export function ChatPanel({
   onPlanGenerated,
   onApprovePlan,
   modelLabel,
+  branches = [],
+  activeBranchId,
+  onBranchChange,
+  onSaveCheckpoint,
+  onCreateBranch,
+  onTurnComplete,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -262,6 +282,9 @@ export function ChatPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const checkpointInputRef = useRef<HTMLInputElement>(null);
+  const [checkpointEditing, setCheckpointEditing] = useState(false);
+  const [checkpointName, setCheckpointName] = useState('');
 
   const exhausted =
     constraints.interactionsRemaining <= 0 || constraints.tokensRemaining <= 0;
@@ -282,10 +305,17 @@ export function ChatPanel({
     const headers: HeadersInit = sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {};
     void (async () => {
       try {
-        const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages`, { headers });
+        const branchQuery = activeBranchId ? `?branch_id=${encodeURIComponent(activeBranchId)}` : '';
+        const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages${branchQuery}`, { headers });
         if (!res.ok) return;
         const data = (await res.json()) as {
-          messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; created_at: string }>;
+          messages: Array<{
+            id: string;
+            role: 'user' | 'assistant';
+            content: string;
+            created_at: string;
+            turn_sequence?: number | null;
+          }>;
         };
         const loadedMessages = data.messages
           .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -294,6 +324,7 @@ export function ChatPanel({
             role: m.role,
             content: m.content,
             timestamp: new Date(m.created_at).getTime(),
+            turnSequence: m.turn_sequence ?? null,
           }));
 
         setMessages((prev) => mergeMessages(prev, loadedMessages));
@@ -301,7 +332,7 @@ export function ChatPanel({
         // Ignore load errors.
       }
     })();
-  }, [sessionId, apiBase, sessionToken]);
+  }, [activeBranchId, sessionId, apiBase, sessionToken]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -309,10 +340,45 @@ export function ChatPanel({
     }
   }, [sessionId, onLoadingChange]);
 
+  useEffect(() => {
+    if (!checkpointEditing) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      checkpointInputRef.current?.focus();
+      checkpointInputRef.current?.select();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [checkpointEditing]);
+
   const stopAgent = useCallback(() => {
     onStopTools?.();
     abortRef.current?.abort();
   }, [onStopTools]);
+
+  const handleStartCheckpointEdit = useCallback(() => {
+    setCheckpointName('');
+    setCheckpointEditing(true);
+  }, []);
+
+  const handleCancelCheckpointEdit = useCallback(() => {
+    setCheckpointEditing(false);
+    setCheckpointName('');
+  }, []);
+
+  const handleSubmitCheckpoint = useCallback(() => {
+    const label = checkpointName.trim();
+    if (!label) {
+      return;
+    }
+    void onSaveCheckpoint?.(label);
+    setCheckpointEditing(false);
+    setCheckpointName('');
+  }, [checkpointName, onSaveCheckpoint]);
 
   const sendMessage = useCallback(async (overrideText?: string, overrideMode?: AgentMode) => {
     const text = (overrideText ?? input).trim();
@@ -342,7 +408,12 @@ export function ChatPanel({
       const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages/stream`, {
         method: 'POST',
         headers: jsonHeaders,
-        body: JSON.stringify({ message: text, mode: selectedMode, ...agentConfigBody }),
+        body: JSON.stringify({
+          message: text,
+          mode: selectedMode,
+          ...(activeBranchId ? { branch_id: activeBranchId } : {}),
+          ...agentConfigBody,
+        }),
         signal: ctrl.signal,
       });
 
@@ -353,7 +424,7 @@ export function ChatPanel({
 
       for await (const { event, data } of readSSEStream(res.body)) {
         if (event === 'tool_calls') {
-          const { request_id, description, tool_calls } = data as SSEToolCallsPayload;
+          const { request_id, description, tool_calls, turn_sequence } = data as SSEToolCallsPayload;
           const msgId = generateId();
           setMessages((prev) => [
             ...prev,
@@ -363,6 +434,7 @@ export function ChatPanel({
               content: '',
               tool_actions: [{ description: description ?? null, tool_calls, tool_results: [] }],
               timestamp: Date.now(),
+              turnSequence: turn_sequence ?? null,
             },
           ]);
 
@@ -399,7 +471,11 @@ export function ChatPanel({
           void fetch(`${apiBase}/api/sessions/${sessionId}/tool-results/${request_id}`, {
             method: 'POST',
             headers: jsonHeaders,
-            body: JSON.stringify({ tool_results: toolResults }),
+            body: JSON.stringify({
+              tool_results: toolResults,
+              ...(activeBranchId ? { branch_id: activeBranchId } : {}),
+              ...(turn_sequence !== undefined ? { turn_sequence } : {}),
+            }),
             signal: ctrl.signal,
           });
 
@@ -409,10 +485,19 @@ export function ChatPanel({
             tokensRemaining: result.constraints_remaining.tokens_remaining,
             interactionsRemaining: result.constraints_remaining.interactions_remaining,
           });
+          if (result.turn_sequence !== undefined) {
+            onTurnComplete?.(result.turn_sequence);
+          }
           if (result.content) {
             setMessages((prev) => [
               ...prev,
-              { id: generateId(), role: 'assistant', content: result.content!, timestamp: Date.now() },
+              {
+                id: generateId(),
+                role: 'assistant',
+                content: result.content!,
+                timestamp: Date.now(),
+                turnSequence: result.turn_sequence ?? null,
+              },
             ]);
           }
 
@@ -432,6 +517,7 @@ export function ChatPanel({
     }
   }, [
     agentConfig,
+    activeBranchId,
     apiBase,
     exhausted,
     input,
@@ -440,6 +526,7 @@ export function ChatPanel({
     onConstraintsUpdate,
     onExecuteTools,
     onPlanGenerated,
+    onTurnComplete,
     sessionId,
     sessionToken,
   ]);
@@ -468,11 +555,22 @@ export function ChatPanel({
       ? (constraints.tokensRemaining / constraints.maxTokens) * 100
       : 0;
   const isLowTokens = tokenPct < 20;
+  const tokenUsagePct = Math.max(0, Math.min(100, 100 - tokenPct));
+  const tokenRingRadius = 8;
+  const tokenRingCircumference = 2 * Math.PI * tokenRingRadius;
+  const tokenRingOffset = tokenRingCircumference - (tokenUsagePct / 100) * tokenRingCircumference;
+  const selectedBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0] ?? null;
+  const branchItems = branches.map((branch) => ({
+    value: branch.id,
+    label: branch.name,
+    selected: branch.id === selectedBranch?.id,
+    onSelect: () => onBranchChange?.(branch.id),
+  }));
 
   return (
-    <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--color-bg-chat)' }}>
+    <div className="flex min-w-0 flex-col h-full overflow-hidden" style={{ background: 'var(--color-bg-chat)' }}>
       {/* Messages */}
-      <div className="relative flex flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
+      <div className="relative flex flex-1 flex-col gap-3 overflow-y-auto px-5 pt-4 pb-4">
         {messages.length === 0 && !loading && (
           <div
             className="flex-1 flex items-center justify-center text-xs opacity-40 pt-12"
@@ -548,6 +646,24 @@ export function ChatPanel({
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
                   />
                 ))}
+                {group.messages.at(-1)?.turnSequence && onCreateBranch ? (
+                  <div className="px-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const name = window.prompt('New branch name');
+                        const turnSequence = group.messages.at(-1)?.turnSequence;
+                        if (name?.trim() && typeof turnSequence === 'number') {
+                          void onCreateBranch(name.trim(), turnSequence);
+                        }
+                      }}
+                      className="text-[11px] opacity-60 transition-opacity hover:opacity-100"
+                      style={{ color: 'var(--color-text-main)' }}
+                    >
+                      Branch from here
+                    </button>
+                  </div>
+                ) : null}
               </div>
             );
           });
@@ -699,24 +815,134 @@ export function ChatPanel({
 
       {/* Usage Bar */}
       <div 
-        className="shrink-0 h-12 px-5 flex items-center justify-between border-none"
+        className="shrink-0 flex h-12 items-center justify-between gap-4 px-5 border-none"
         style={{ 
           background: 'transparent'
         }}
       >
-        <div className="flex items-center gap-2 opacity-50" style={{ color: 'var(--color-text-main)' }}>
-          <span className="text-[12px] font-medium tracking-tight">{constraints.interactionsRemaining} / {constraints.maxInteractions}</span>
-          <MessageSquare size={13} />
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-[12px] font-medium opacity-50" style={{ color: 'var(--color-text-main)' }}>
-            {Math.round(100 - tokenPct)}% tokens used
-          </span>
-          <div className="w-40 h-1 rounded-full overflow-hidden bg-white/10">
-            <div 
-              className="h-full transition-all duration-300"
-              style={{ width: `${100 - tokenPct}%`, background: isLowTokens ? 'var(--color-status-error)' : 'var(--color-status-diff-add)' }}
+        <div className="flex min-w-0 flex-1 items-center justify-start gap-4" style={{ color: 'var(--color-text-main)' }}>
+          <div className="shrink-0 flex items-center gap-2 opacity-50">
+            <span className="text-[12px] font-medium tracking-tight">{constraints.interactionsRemaining} / {constraints.maxInteractions}</span>
+            <MessageSquare size={13} />
+          </div>
+          {branchItems.length > 0 ? (
+            <DropdownMenu
+              label="Branch selector"
+              role="listbox"
+              widthClassName="w-auto"
+              menuPositionClassName="left-0 bottom-[calc(100%+10px)] min-w-[180px]"
+              triggerClassName="chat-inline-menu-trigger flex h-7 items-center justify-center px-1 py-1 text-left"
+              itemClassName="chat-inline-menu-item flex w-full items-center justify-between px-3.5 py-2.5 text-left"
+              dataTestId="branch-select"
+              items={branchItems}
+              trigger={(open) => (
+                <DropdownTriggerLabel
+                  primary={selectedBranch?.name ?? 'main'}
+                  open={open}
+                  compact
+                />
+              )}
             />
+          ) : null}
+          <div className="relative h-7 w-7 shrink-0">
+            {checkpointEditing ? (
+              <div
+                className="chat-inline-editor absolute left-0 top-1/2 z-10 flex w-[248px] -translate-y-1/2 items-center justify-start gap-2 px-2 py-1"
+                data-testid="checkpoint-editor"
+              >
+                <span className="inline-flex shrink-0 items-center opacity-70">
+                  <Bookmark size={14} />
+                </span>
+                <input
+                  ref={checkpointInputRef}
+                  type="text"
+                  value={checkpointName}
+                  onChange={(event) => setCheckpointName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleSubmitCheckpoint();
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      handleCancelCheckpointEdit();
+                    }
+                  }}
+                  placeholder="Checkpoint name"
+                  className="chat-inline-editor-input min-w-0 flex-1 bg-transparent text-[12px] outline-none"
+                  style={{ color: 'var(--color-text-main)' }}
+                  aria-label="Checkpoint name"
+                  data-testid="checkpoint-name-input"
+                />
+                <button
+                  type="button"
+                  onClick={handleSubmitCheckpoint}
+                  disabled={!checkpointName.trim()}
+                  className="chat-inline-icon-button"
+                  aria-label="Confirm checkpoint"
+                  data-testid="confirm-checkpoint"
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelCheckpointEdit}
+                  className="chat-inline-icon-button"
+                  aria-label="Cancel checkpoint"
+                  data-testid="cancel-checkpoint"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStartCheckpointEdit}
+                className="absolute left-0 top-1/2 flex h-7 -translate-y-1/2 items-center justify-center px-1 py-1 text-left chat-inline-menu-trigger"
+                data-testid="save-checkpoint"
+                aria-label="Save checkpoint"
+              >
+                <DropdownTriggerLabel
+                  primary=""
+                  open={false}
+                  compact
+                  icon={<Bookmark size={14} />}
+                />
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-2 opacity-70" style={{ color: 'var(--color-text-main)' }}>
+          <span className="text-[12px] font-medium tracking-tight">Context</span>
+          <div
+            className="chat-token-indicator"
+            data-testid="token-context-indicator"
+            aria-label={`Context: ${Math.round(tokenUsagePct)}% tokens used`}
+            title={`Context: ${Math.round(tokenUsagePct)}% tokens used`}
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+              <circle
+                cx="10"
+                cy="10"
+                r={tokenRingRadius}
+                fill="none"
+                stroke="rgba(255,255,255,0.12)"
+                strokeWidth="2.5"
+              />
+              <circle
+                cx="10"
+                cy="10"
+                r={tokenRingRadius}
+                fill="none"
+                stroke={isLowTokens ? 'var(--color-status-error)' : 'rgba(229,229,229,0.72)'}
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeDasharray={tokenRingCircumference}
+                strokeDashoffset={tokenRingOffset}
+                transform="rotate(-90 10 10)"
+                style={{ transition: 'stroke-dashoffset 220ms ease, stroke 220ms ease' }}
+              />
+            </svg>
           </div>
         </div>
       </div>    </div>

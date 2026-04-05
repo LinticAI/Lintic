@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Check, ChevronDown, Play, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ChevronDown, Play, RefreshCw } from 'lucide-react';
 import { useWebContainer } from '../hooks/useWebContainer.js';
 import { ensureMockPgPackageInstalled, readFile, writeFile } from '../lib/webcontainer.js';
+import { DropdownMenu, DropdownTriggerLabel } from './DropdownMenu.js';
 
 const STATE_PATH = '.lintic/mock-pg/state.json';
 const COMMANDS_DIR = '.lintic/mock-pg/commands';
@@ -201,118 +202,6 @@ function SectionDisclosure({
       {open ? (
         <div className="border-t px-4 py-4" style={{ borderColor: 'var(--db-border-default)' }}>
           {children}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function CustomSelect({
-  label,
-  value,
-  options,
-  onChange,
-  widthClassName = 'min-w-[180px]',
-}: {
-  label: string;
-  value: string;
-  options: Array<{ value: string; label: string; meta?: string }>;
-  onChange: (value: string) => void;
-  widthClassName?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const selected = options.find((option) => option.value === value) ?? options[0] ?? null;
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-      }
-    };
-
-    window.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      window.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [open]);
-
-  return (
-    <div ref={containerRef} className={`relative ${widthClassName}`}>
-      <button
-        type="button"
-        aria-label={label}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        className="db-control flex w-full items-center justify-between px-3.5 py-2.5 text-left"
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-medium">{selected?.label ?? 'Select'}</span>
-          {selected?.meta ? (
-            <span className="truncate text-xs" style={{ color: 'var(--db-text-tertiary)' }}>
-              {selected.meta}
-            </span>
-          ) : null}
-        </span>
-        <span className="ml-3 inline-flex shrink-0 items-center">
-          <ChevronDown
-            size={16}
-            style={{
-              color: 'var(--db-text-tertiary)',
-              transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
-              transition: 'transform 160ms ease',
-            }}
-          />
-        </span>
-      </button>
-
-      {open ? (
-        <div className="db-menu absolute left-0 right-0 top-[calc(100%+10px)] z-20 overflow-hidden">
-          <div role="listbox" aria-label={label} className="max-h-72 overflow-auto p-2">
-            {options.map((option) => {
-              const isSelected = option.value === selected?.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  onClick={() => {
-                    onChange(option.value);
-                    setOpen(false);
-                  }}
-                  data-selected={isSelected}
-                  className="db-menu-option flex w-full items-center justify-between px-3.5 py-2.5 text-left"
-                >
-                  <span className="flex flex-col">
-                    <span className="text-sm" style={{ color: 'var(--db-text-primary)' }}>
-                      {option.label}
-                    </span>
-                    {option.meta ? (
-                      <span className="text-xs" style={{ color: 'var(--db-text-tertiary)' }}>
-                        {option.meta}
-                      </span>
-                    ) : null}
-                  </span>
-                  {isSelected ? <Check size={14} style={{ color: 'var(--db-ring-focus)' }} /> : null}
-                </button>
-              );
-            })}
-          </div>
         </div>
       ) : null}
     </div>
@@ -538,6 +427,8 @@ export function DatabasePanel({ onOpenSetupFile }: DatabasePanelProps) {
     label: table.name,
     meta: `${table.rowCount} row${table.rowCount === 1 ? '' : 's'}`,
   })) ?? [];
+  const selectedPoolOption = poolOptions.find((option) => option.value === activePool?.id) ?? poolOptions[0] ?? null;
+  const selectedTableOption = tableOptions.find((option) => option.value === selectedTableName) ?? tableOptions[0] ?? null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ background: 'var(--db-surface-canvas)' }}>
@@ -582,12 +473,22 @@ export function DatabasePanel({ onOpenSetupFile }: DatabasePanelProps) {
 
           {activePool ? (
             <>
-              <CustomSelect
+              <DropdownMenu
                 label="Database pool"
-                value={activePool.id}
-                options={poolOptions}
-                onChange={setSelectedPoolId}
+                role="listbox"
                 widthClassName="min-w-[220px]"
+                items={poolOptions.map((option) => ({
+                  ...option,
+                  selected: option.value === selectedPoolOption?.value,
+                  onSelect: () => setSelectedPoolId(option.value),
+                }))}
+                trigger={(open) => (
+                  <DropdownTriggerLabel
+                    primary={selectedPoolOption?.label ?? 'Select'}
+                    secondary={selectedPoolOption?.meta}
+                    open={open}
+                  />
+                )}
               />
               <span>{activePool.tables.length} table{activePool.tables.length === 1 ? '' : 's'}</span>
               <span>{activePool.recentQueries.length} quer{activePool.recentQueries.length === 1 ? 'y' : 'ies'}</span>
@@ -711,16 +612,26 @@ export function DatabasePanel({ onOpenSetupFile }: DatabasePanelProps) {
         {activeTab === 'tables' && activePool ? (
           <div className="grid h-full min-h-0 gap-4 grid-rows-[auto_auto_minmax(0,1fr)]">
             <div className="flex flex-wrap items-center gap-3">
-              <CustomSelect
+              <DropdownMenu
                 label="Selected table"
-                value={selectedTableName ?? ''}
-                options={tableOptions}
-                onChange={(nextTableName) => {
-                  setHasChosenTab(true);
-                  setSelectedTableName(nextTableName);
-                  setQueryText(`SELECT * FROM ${nextTableName} LIMIT 20;`);
-                }}
+                role="listbox"
                 widthClassName="min-w-[180px]"
+                items={tableOptions.map((option) => ({
+                  ...option,
+                  selected: option.value === selectedTableOption?.value,
+                  onSelect: () => {
+                    setHasChosenTab(true);
+                    setSelectedTableName(option.value);
+                    setQueryText(`SELECT * FROM ${option.value} LIMIT 20;`);
+                  },
+                }))}
+                trigger={(open) => (
+                  <DropdownTriggerLabel
+                    primary={selectedTableOption?.label ?? 'Select'}
+                    secondary={selectedTableOption?.meta}
+                    open={open}
+                  />
+                )}
               />
               {selectedTable ? (
                 <span className="text-sm" style={{ color: 'var(--db-text-secondary)' }}>

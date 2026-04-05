@@ -1,5 +1,5 @@
-import type { PromptSummary } from '@lintic/core';
-import { getWebContainer } from './webcontainer.js';
+import type { MockPgPoolExport, PromptSummary } from '@lintic/core';
+import { getWebContainer, restoreWorkspaceSnapshot, writeMockPgBootstrapState } from './webcontainer.js';
 
 const STORAGE_KEY = 'lintic_session';
 
@@ -7,11 +7,25 @@ export interface PersistedSession {
   sessionId: string;
   sessionToken: string;
   prompt: PromptSummary;
+  branchId?: string;
 }
 
 export interface AgentSummary {
   provider: string;
   model: string;
+}
+
+export interface PersistedBranchSummary {
+  id: string;
+  name: string;
+  parent_branch_id?: string;
+  forked_from_sequence?: number;
+  created_at: number;
+}
+
+export interface RestoredWorkspaceState {
+  activePath?: string;
+  workspaceSection?: 'code' | 'database' | 'git';
 }
 
 export interface RestoredConstraints {
@@ -39,11 +53,15 @@ export type SessionValidationResult =
       constraints: RestoredConstraints;
       stats: SessionSummaryStats;
       agent?: AgentSummary;
+      branch?: PersistedBranchSummary | null;
+      branches?: PersistedBranchSummary[];
     }
   | {
       status: 'submitted';
       stats: SessionSummaryStats;
       agent?: AgentSummary;
+      branch?: PersistedBranchSummary | null;
+      branches?: PersistedBranchSummary[];
     };
 
 interface StorageLike {
@@ -125,6 +143,8 @@ export async function validateSession(
         seconds_remaining: number;
       };
       agent?: AgentSummary;
+      branch?: PersistedBranchSummary | null;
+      branches?: PersistedBranchSummary[];
     };
     const stats: SessionSummaryStats = {
       tokensUsed: data.session.tokens_used,
@@ -144,6 +164,8 @@ export async function validateSession(
         status: 'submitted',
         stats,
         ...(data.agent ? { agent: data.agent } : {}),
+        ...(data.branch ? { branch: data.branch } : {}),
+        ...(data.branches ? { branches: data.branches } : {}),
       };
     }
 
@@ -153,6 +175,8 @@ export async function validateSession(
       status: 'active',
       stats,
       ...(data.agent ? { agent: data.agent } : {}),
+      ...(data.branch ? { branch: data.branch } : {}),
+      ...(data.branches ? { branches: data.branches } : {}),
       constraints: {
       tokensRemaining: data.constraints_remaining.tokens_remaining,
       interactionsRemaining: data.constraints_remaining.interactions_remaining,
@@ -170,13 +194,39 @@ export async function validateSession(
 export async function restoreFiles(
   sessionId: string,
   sessionToken: string,
+  branchId?: string,
   apiBase = '',
-): Promise<void> {
+): Promise<RestoredWorkspaceState | null> {
   try {
-    const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages`, {
+    const branchQuery = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : '';
+    const workspaceRes = await fetch(`${apiBase}/api/sessions/${sessionId}/workspace${branchQuery}`, {
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
-    if (!res.ok) return;
+    if (workspaceRes.ok) {
+      const data = await workspaceRes.json() as {
+        snapshot: {
+          filesystem: Array<{ path: string; encoding: 'utf-8' | 'base64'; content: string }>;
+          mock_pg: unknown[];
+          active_path?: string;
+          workspace_section?: 'code' | 'database' | 'git';
+        } | null;
+      };
+      if (data.snapshot) {
+        await restoreWorkspaceSnapshot(data.snapshot.filesystem);
+        await writeMockPgBootstrapState(
+          Array.isArray(data.snapshot.mock_pg) ? data.snapshot.mock_pg as MockPgPoolExport[] : [],
+        );
+        return {
+          ...(data.snapshot.active_path ? { activePath: data.snapshot.active_path } : {}),
+          ...(data.snapshot.workspace_section ? { workspaceSection: data.snapshot.workspace_section } : {}),
+        };
+      }
+    }
+
+    const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages${branchQuery}`, {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
+    if (!res.ok) return null;
     const data = await res.json() as {
       messages: Array<{ role: string; content: string }>;
     };
@@ -202,5 +252,8 @@ export async function restoreFiles(
         }
       } catch { /* ignore non-JSON or malformed messages */ }
     }
-  } catch { /* ignore all restore errors */ }
+    return null;
+  } catch {
+    return null;
+  }
 }

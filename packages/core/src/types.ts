@@ -141,6 +141,62 @@ export interface PromptSummary {
   tags?: string[];
 }
 
+export interface SessionBranch {
+  id: string;
+  session_id: string;
+  name: string;
+  parent_branch_id?: string;
+  forked_from_sequence?: number;
+  created_at: number;
+}
+
+export type WorkspaceSection = 'code' | 'database' | 'git';
+
+export type SnapshotEncoding = 'utf-8' | 'base64';
+
+export interface SnapshotFile {
+  path: string;
+  encoding: SnapshotEncoding;
+  content: string;
+}
+
+export type WorkspaceSnapshotKind = 'draft' | 'turn' | 'checkpoint';
+
+export interface MockPgPoolExport {
+  id: string;
+  name: string;
+  tables: Array<{
+    name: string;
+    columns: Array<{ name: string; type: string; primaryKey: boolean }>;
+    rows: Array<Record<string, string | number | boolean | null>>;
+  }>;
+  indexes: Array<{ name: string; table: string; columns: string[]; kind: 'primary' | 'index' }>;
+  recentQueries: Array<{
+    sql: string;
+    params: Array<string | number | boolean | null>;
+    operation: string;
+    table: string | null;
+    rowCount: number;
+    usedIndex?: string;
+    slowQueryReason?: string;
+    timestamp: number;
+  }>;
+}
+
+export interface WorkspaceSnapshot {
+  id: string;
+  session_id: string;
+  branch_id: string;
+  kind: WorkspaceSnapshotKind;
+  turn_sequence?: number;
+  label?: string;
+  created_at: number;
+  active_path?: string;
+  workspace_section?: WorkspaceSection;
+  filesystem: SnapshotFile[];
+  mock_pg: MockPgPoolExport[];
+}
+
 export type AssessmentLinkStatus = 'active' | 'consumed' | 'expired' | 'invalid';
 
 export interface AssessmentLinkRecord {

@@ -14,9 +14,10 @@ interface IdePanelProps {
   terminalRef?: React.RefObject<TerminalHandle>;
   /** Path of a file to open/activate from the parent. */
   requestOpenFile?: string | null;
+  onActiveFileChange?: (path: string | null) => void;
 }
 
-export function IdePanel({ terminalRef, requestOpenFile }: IdePanelProps) {
+export function IdePanel({ terminalRef, requestOpenFile, onActiveFileChange }: IdePanelProps) {
   const internalRef = useRef<TerminalHandle>(null);
   const resolvedRef = terminalRef ?? internalRef;
   const [files, setFiles] = useState<Record<string, string>>({});
@@ -41,6 +42,10 @@ export function IdePanel({ terminalRef, requestOpenFile }: IdePanelProps) {
       }
     }
   }, [requestOpenFile]);
+
+  useEffect(() => {
+    onActiveFileChange?.(activeTab);
+  }, [activeTab, onActiveFileChange]);
 
   const syncFileSystem = useCallback(async (path: string = '') => {
     if (!wc) return;

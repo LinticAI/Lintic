@@ -356,6 +356,7 @@ export function ReviewDashboard({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedEventIndex, setSelectedEventIndex] = useState(0);
+  const [activeBranchId, setActiveBranchId] = useState<string | null>(null);
   const conversationRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   useEffect(() => {
@@ -365,7 +366,8 @@ export function ReviewDashboard({
 
     void (async () => {
       try {
-        const response = await fetch(`${apiBase}/api/review/${sessionId}`);
+        const branchQuery = activeBranchId ? `?branch_id=${encodeURIComponent(activeBranchId)}` : '';
+        const response = await fetch(`${apiBase}/api/review/${sessionId}${branchQuery}`);
         if (!response.ok) {
           const body = await response.json() as { error?: string };
           throw new Error(body.error ?? `HTTP ${response.status}`);
@@ -376,6 +378,7 @@ export function ReviewDashboard({
             ? payload.recording.events
             : synthesizeReplayEventsFromMessages(payload.messages, payload.session.created_at);
           setData(payload);
+          setActiveBranchId((current) => current ?? payload.branch?.id ?? payload.branches?.[0]?.id ?? null);
           setSelectedEventIndex(Math.max(0, initialEvents.length - 1));
         }
       } catch (fetchError) {
@@ -388,7 +391,7 @@ export function ReviewDashboard({
     })();
 
     return () => { cancelled = true; };
-  }, [apiBase, sessionId]);
+  }, [activeBranchId, apiBase, sessionId]);
 
   const events = useMemo(() => {
     if (!data) return [];
@@ -407,7 +410,24 @@ export function ReviewDashboard({
     () => buildCodeStateSnapshot(events, selectedEventIndex),
     [events, selectedEventIndex],
   );
-  const activeCode = codeState.activePath ? codeState.files[codeState.activePath] ?? '' : '';
+  const effectiveCodeState = useMemo(() => {
+    if (Object.keys(codeState.files).length > 0 || !data?.workspace_snapshot) {
+      return codeState;
+    }
+
+    const files = Object.fromEntries(
+      data.workspace_snapshot.filesystem
+        .filter((file) => file.encoding === 'utf-8')
+        .map((file) => [file.path, file.content]),
+    );
+
+    return {
+      files,
+      activePath: data.workspace_snapshot.active_path ?? Object.keys(files)[0] ?? null,
+      diff: null,
+    };
+  }, [codeState, data]);
+  const activeCode = effectiveCodeState.activePath ? effectiveCodeState.files[effectiveCodeState.activePath] ?? '' : '';
 
   // Map from ConversationEntry index to ConversationItem index for anchor tracking
   const anchorItemIndex = useMemo(() => {
@@ -482,6 +502,20 @@ export function ReviewDashboard({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {data.branches && data.branches.length > 0 ? (
+            <select
+              value={activeBranchId ?? data.branch?.id ?? data.branches[0]?.id ?? ''}
+              onChange={(event) => setActiveBranchId(event.target.value)}
+              className="rounded-sm border-none px-2 py-1 text-[11px]"
+              style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--color-text-main)' }}
+            >
+              {data.branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <div className="text-[11px] tabular-nums" style={{ color: 'var(--color-text-dim)' }}>
             {events.length === 0 ? '0/0' : `${selectedEventIndex + 1}/${events.length}`}
           </div>
@@ -599,16 +633,16 @@ export function ReviewDashboard({
                   Snapshot
                 </span>
               </div>
-              {codeState.activePath && (
+              {effectiveCodeState.activePath && (
                 <span className="font-mono text-[10px]" style={{ color: 'var(--color-text-dimmest)' }}>
-                  {codeState.activePath}
+                  {effectiveCodeState.activePath}
                 </span>
               )}
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3" style={{ background: 'var(--color-bg-code)' }}>
               <AnimatePresence mode="wait">
                 <motion.pre
-                  key={(codeState.activePath ?? 'null') + selectedEventIndex}
+                  key={(effectiveCodeState.activePath ?? 'null') + selectedEventIndex}
                   data-testid="code-state-content"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -633,7 +667,7 @@ export function ReviewDashboard({
             <div className="min-h-0 flex-1 overflow-auto p-3" style={{ background: 'var(--color-bg-code)' }}>
               <AnimatePresence mode="wait">
                 <motion.pre
-                  key={(codeState.activePath ?? 'null') + '-diff-' + selectedEventIndex}
+                  key={(effectiveCodeState.activePath ?? 'null') + '-diff-' + selectedEventIndex}
                   data-testid="code-state-diff"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}

@@ -20,7 +20,12 @@ import type {
   Constraint,
   PromptSummary,
   PromptConfig,
+  SessionBranch,
   SessionStatus,
+  SnapshotFile,
+  WorkspaceSection,
+  WorkspaceSnapshotKind,
+  MockPgPoolExport,
 } from '@lintic/core';
 import {
   buildAssessmentLink,
@@ -264,6 +269,62 @@ async function recordAgentError(db: DatabaseAdapter, sessionId: string, message:
   });
 }
 
+async function resolveBranchOrRespond(
+  db: DatabaseAdapter,
+  res: Response,
+  sessionId: string,
+  branchId?: string,
+): Promise<SessionBranch | null> {
+  const branch = branchId
+    ? await db.getBranch(sessionId, branchId)
+    : await db.getMainBranch(sessionId);
+
+  if (!branch) {
+    res.status(404).json({ error: 'Branch not found' });
+    return null;
+  }
+
+  return branch;
+}
+
+function parseWorkspaceKind(value: unknown): WorkspaceSnapshotKind | undefined {
+  return value === 'draft' || value === 'turn' || value === 'checkpoint' ? value : undefined;
+}
+
+function parseWorkspaceSection(value: unknown): WorkspaceSection | undefined {
+  return value === 'code' || value === 'database' || value === 'git' ? value : undefined;
+}
+
+function isSnapshotFileArray(value: unknown): value is SnapshotFile[] {
+  return Array.isArray(value) && value.every((entry) => (
+    typeof entry === 'object'
+    && entry !== null
+    && typeof (entry as Record<string, unknown>)['path'] === 'string'
+    && ((entry as Record<string, unknown>)['encoding'] === 'utf-8'
+      || (entry as Record<string, unknown>)['encoding'] === 'base64')
+    && typeof (entry as Record<string, unknown>)['content'] === 'string'
+  ));
+}
+
+function isMockPgExportArray(value: unknown): value is MockPgPoolExport[] {
+  return Array.isArray(value);
+}
+
+async function resolveContinuationTurnSequence(
+  db: DatabaseAdapter,
+  sessionId: string,
+  branchId: string,
+): Promise<number | null> {
+  const messages = await db.getBranchMessages(sessionId, branchId);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const turnSequence = messages[index]?.turn_sequence;
+    if (turnSequence !== null && turnSequence !== undefined) {
+      return turnSequence;
+    }
+  }
+  return null;
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, config: Config): Router {
@@ -463,6 +524,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       candidate_email: body.candidate_email,
       constraint: config.constraints,
     });
+    const branch = await db.getMainBranch(id);
 
     res.status(201).json({
       session_id: id,
@@ -470,6 +532,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       assessment_link: `/assessment/${id}?token=${token}`,
       prompt: toPromptSummary(prompt),
       agent: buildAgentSummary(config),
+      branch,
     });
   }));
 
@@ -489,13 +552,276 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       seconds_remaining: Math.max(0, timeLimitSeconds - elapsed),
     };
 
-    res.json({ session, constraints_remaining, agent: buildAgentSummary(config) });
+    const branches = await db.listBranches(session.id);
+    const branch = await db.getMainBranch(session.id);
+
+    res.json({ session, constraints_remaining, agent: buildAgentSummary(config), branch, branches });
+  }));
+
+  router.get('/sessions/:id/branches', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branches = await db.listBranches(sessionId);
+    const currentBranch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof req.query['branch_id'] === 'string' ? req.query['branch_id'] : undefined,
+    );
+    if (!currentBranch) {
+      return;
+    }
+
+    res.json({
+      branches,
+      current_branch_id: currentBranch.id,
+    });
+  }));
+
+  router.post('/sessions/:id/branches', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const body = req.body as {
+      name?: unknown;
+      branch_id?: unknown;
+      forked_from_sequence?: unknown;
+    };
+
+    if (typeof body.name !== 'string' || !body.name.trim()) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    if (typeof body.forked_from_sequence !== 'number' || !Number.isInteger(body.forked_from_sequence) || body.forked_from_sequence < 1) {
+      res.status(400).json({ error: 'forked_from_sequence must be a positive integer' });
+      return;
+    }
+
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const parentBranch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof body.branch_id === 'string' ? body.branch_id : undefined,
+    );
+    if (!parentBranch) {
+      return;
+    }
+
+    const branchName = body.name.trim();
+    const existingBranches = await db.listBranches(sessionId);
+    if (existingBranches.some((branch) => branch.name === branchName)) {
+      res.status(409).json({ error: 'A branch with that name already exists' });
+      return;
+    }
+
+    const parentMessages = await db.getBranchMessages(sessionId, parentBranch.id);
+    const hasCompletedTurn = parentMessages.some((message) => (
+      message.turn_sequence === body.forked_from_sequence && message.role === 'assistant'
+    ));
+    if (!hasCompletedTurn) {
+      res.status(400).json({ error: 'forked_from_sequence must reference a completed assistant turn' });
+      return;
+    }
+
+    const branch = await db.createBranch({
+      session_id: sessionId,
+      name: branchName,
+      parent_branch_id: parentBranch.id,
+      forked_from_sequence: body.forked_from_sequence,
+    });
+
+    res.status(201).json({
+      branch,
+      branches: await db.listBranches(sessionId),
+    });
+  }));
+
+  router.put('/sessions/:id/workspace', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const body = req.body as {
+      branch_id?: unknown;
+      kind?: unknown;
+      turn_sequence?: unknown;
+      label?: unknown;
+      active_path?: unknown;
+      workspace_section?: unknown;
+      filesystem?: unknown;
+      mock_pg?: unknown;
+    };
+
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof body.branch_id === 'string' ? body.branch_id : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const kind = parseWorkspaceKind(body.kind) ?? 'draft';
+    if (!isSnapshotFileArray(body.filesystem)) {
+      res.status(400).json({ error: 'filesystem must be an array of snapshot files' });
+      return;
+    }
+    if (!isMockPgExportArray(body.mock_pg)) {
+      res.status(400).json({ error: 'mock_pg must be an array' });
+      return;
+    }
+    if (body.turn_sequence !== undefined && (typeof body.turn_sequence !== 'number' || !Number.isInteger(body.turn_sequence))) {
+      res.status(400).json({ error: 'turn_sequence must be an integer when provided' });
+      return;
+    }
+    if (body.label !== undefined && typeof body.label !== 'string') {
+      res.status(400).json({ error: 'label must be a string when provided' });
+      return;
+    }
+    if (body.active_path !== undefined && typeof body.active_path !== 'string') {
+      res.status(400).json({ error: 'active_path must be a string when provided' });
+      return;
+    }
+    if (body.workspace_section !== undefined && !parseWorkspaceSection(body.workspace_section)) {
+      res.status(400).json({ error: 'workspace_section must be code, database, or git' });
+      return;
+    }
+
+    const workspaceSection = parseWorkspaceSection(body.workspace_section);
+    const input = {
+      session_id: sessionId,
+      branch_id: branch.id,
+      kind,
+      ...(typeof body.turn_sequence === 'number' ? { turn_sequence: body.turn_sequence } : {}),
+      ...(typeof body.label === 'string' ? { label: body.label } : {}),
+      ...(typeof body.active_path === 'string' ? { active_path: body.active_path } : {}),
+      ...(workspaceSection ? { workspace_section: workspaceSection } : {}),
+      filesystem: body.filesystem,
+      mock_pg: body.mock_pg,
+    };
+
+    const snapshot = kind === 'draft'
+      ? await db.upsertWorkspaceSnapshot(input)
+      : await db.createWorkspaceSnapshot(input);
+
+    res.json({ snapshot });
+  }));
+
+  router.get('/sessions/:id/workspace', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof req.query['branch_id'] === 'string' ? req.query['branch_id'] : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const kind = parseWorkspaceKind(req.query['kind']);
+    const turnSequence =
+      typeof req.query['turn_sequence'] === 'string' && req.query['turn_sequence'].trim()
+        ? Number(req.query['turn_sequence'])
+        : undefined;
+    if (turnSequence !== undefined && !Number.isInteger(turnSequence)) {
+      res.status(400).json({ error: 'turn_sequence must be an integer when provided' });
+      return;
+    }
+
+    const snapshot = await db.getWorkspaceSnapshot(sessionId, branch.id, {
+      ...(kind ? { kind } : {}),
+      ...(turnSequence !== undefined ? { turn_sequence: turnSequence } : {}),
+    });
+
+    res.json({ snapshot, branch, branches: await db.listBranches(sessionId) });
+  }));
+
+  router.post('/sessions/:id/checkpoints', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const body = req.body as {
+      branch_id?: unknown;
+      label?: unknown;
+      turn_sequence?: unknown;
+    };
+
+    if (typeof body.label !== 'string' || !body.label.trim()) {
+      res.status(400).json({ error: 'label is required' });
+      return;
+    }
+
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof body.branch_id === 'string' ? body.branch_id : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const draft = await db.getWorkspaceSnapshot(sessionId, branch.id, { kind: 'draft' });
+    if (!draft) {
+      res.status(404).json({ error: 'No draft workspace snapshot found for this branch' });
+      return;
+    }
+
+    if (body.turn_sequence !== undefined && (typeof body.turn_sequence !== 'number' || !Number.isInteger(body.turn_sequence))) {
+      res.status(400).json({ error: 'turn_sequence must be an integer when provided' });
+      return;
+    }
+
+    const checkpointInput = {
+      session_id: sessionId,
+      branch_id: branch.id,
+      kind: 'checkpoint' as const,
+      ...(
+        typeof body.turn_sequence === 'number'
+          ? { turn_sequence: body.turn_sequence }
+          : draft.turn_sequence !== undefined
+            ? { turn_sequence: draft.turn_sequence }
+            : {}
+      ),
+      label: body.label.trim(),
+      ...(draft.active_path ? { active_path: draft.active_path } : {}),
+      ...(draft.workspace_section ? { workspace_section: draft.workspace_section } : {}),
+      filesystem: draft.filesystem,
+      mock_pg: draft.mock_pg,
+    };
+    const snapshot = await db.createWorkspaceSnapshot(checkpointInput);
+
+    res.status(201).json({ snapshot });
   }));
 
   // POST /api/sessions/:id/messages — single LLM call; stores tool_calls in DB if stop_reason='tool_use'
   router.post('/sessions/:id/messages', requireToken(db), asyncRoute(async (req, res) => {
     const sessionId = req.params['id'] as string;
-    const body = req.body as { message?: unknown; agent_config?: unknown; mode?: unknown };
+    const body = req.body as { message?: unknown; agent_config?: unknown; mode?: unknown; branch_id?: unknown };
 
     if (typeof body.message !== 'string' || !body.message.trim()) {
       res.status(400).json({ error: 'message is required and must be a non-empty string' });
@@ -513,6 +839,16 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       return;
     }
 
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof body.branch_id === 'string' ? body.branch_id : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
     const elapsed = (Date.now() - session.created_at) / 1000;
     const timeLimitSeconds = session.constraint.time_limit_minutes * 60;
     if (
@@ -526,7 +862,8 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     const mode: AgentRequestMode = isAgentRequestMode(body.mode) ? body.mode : 'build';
     const planFilePath = mode === 'plan' ? generatePlanFilePath() : undefined;
-    const storedMessages = await db.getMessages(sessionId);
+    const turnSequence = await db.allocateTurnSequence(sessionId);
+    const storedMessages = await db.getBranchMessages(sessionId, branch.id);
     const history: Message[] = createRequestHistory(storedMessages, mode, planFilePath);
 
     const constraints_remaining: ConstraintsRemaining = {
@@ -539,8 +876,8 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     // Persist the user turn before calling the provider so it remains visible if the
     // adapter fails after the request has already been accepted.
-    await db.addMessage(sessionId, 'user', message, 0);
-    await db.addReplayEvent(sessionId, 'message', Date.now(), { role: 'user', content: message });
+    await db.addBranchMessage(sessionId, branch.id, turnSequence, 'user', message, 0);
+    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'message', Date.now(), { role: 'user', content: message });
 
     const reqAdapter = await resolveAdapter(adapter, body.agent_config);
 
@@ -549,7 +886,11 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       agentResponse = await reqAdapter.sendMessage(message, context);
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : 'Unknown adapter error';
-      await recordAgentError(db, sessionId, errMsg);
+      await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', Date.now(), {
+        content: null,
+        stop_reason: 'error',
+        error: errMsg,
+      });
       res.status(502).json({ error: `Agent adapter error: ${errMsg}` });
       return;
     }
@@ -559,19 +900,26 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       agentResponse.stop_reason === 'tool_use' && agentResponse.tool_calls?.length
         ? JSON.stringify({ __type: 'tool_use', content: agentResponse.content, tool_calls: agentResponse.tool_calls })
         : (agentResponse.content ?? '');
-    await db.addMessage(sessionId, 'assistant', assistantContent, agentResponse.usage.completion_tokens);
+    await db.addBranchMessage(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'assistant',
+      assistantContent,
+      agentResponse.usage.completion_tokens,
+    );
 
     // Update usage counters (+1 interaction for the initial user message)
     await db.updateSessionUsage(sessionId, agentResponse.usage.total_tokens, 1);
 
     // Record replay events
     const now = Date.now();
-    await db.addReplayEvent(sessionId, 'agent_response', now, {
+    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', now, {
       content: agentResponse.content,
       stop_reason: agentResponse.stop_reason,
       usage: agentResponse.usage,
     });
-    await db.addReplayEvent(sessionId, 'resource_usage', now, {
+    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'resource_usage', now, {
       prompt_tokens: agentResponse.usage.prompt_tokens,
       completion_tokens: agentResponse.usage.completion_tokens,
       total_tokens: agentResponse.usage.total_tokens,
@@ -589,13 +937,21 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       tool_calls: agentResponse.tool_calls ?? [],
       usage: agentResponse.usage,
       constraints_remaining: updatedConstraints,
+      branch_id: branch.id,
+      turn_sequence: turnSequence,
     });
   }));
 
   // POST /api/sessions/:id/tool-results — round-trip continuation: store tool results and make one LLM call
   router.post('/sessions/:id/tool-results', requireToken(db), asyncRoute(async (req, res) => {
     const sessionId = req.params['id'] as string;
-    const body = req.body as { tool_results?: unknown; agent_config?: unknown; mode?: unknown };
+    const body = req.body as {
+      tool_results?: unknown;
+      agent_config?: unknown;
+      mode?: unknown;
+      branch_id?: unknown;
+      turn_sequence?: unknown;
+    };
 
     if (!Array.isArray(body.tool_results)) {
       res.status(400).json({ error: 'tool_results must be a non-empty array' });
@@ -612,6 +968,16 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       return;
     }
 
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof body.branch_id === 'string' ? body.branch_id : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
     const elapsed = (Date.now() - session.created_at) / 1000;
     const timeLimitSeconds = session.constraint.time_limit_minutes * 60;
     if (
@@ -623,13 +989,16 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     }
 
     const toolResults = body.tool_results as ToolResult[];
+    const turnSequence = typeof body.turn_sequence === 'number' && Number.isInteger(body.turn_sequence)
+      ? body.turn_sequence
+      : await resolveContinuationTurnSequence(db, sessionId, branch.id);
 
     // Persist tool results
-    await db.addMessage(sessionId, 'tool', JSON.stringify(toolResults), 0);
+    await db.addBranchMessage(sessionId, branch.id, turnSequence, 'tool', JSON.stringify(toolResults), 0);
 
     // Rebuild history (now includes the tool results we just stored)
     const mode: AgentRequestMode = isAgentRequestMode(body.mode) ? body.mode : 'build';
-    const storedMessages = await db.getMessages(sessionId);
+    const storedMessages = await db.getBranchMessages(sessionId, branch.id);
     const history: Message[] = createRequestHistory(storedMessages, mode);
 
     const constraints_remaining: ConstraintsRemaining = {
@@ -648,7 +1017,11 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       agentResponse = await reqAdapter.sendMessage(null, context);
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : 'Unknown adapter error';
-      await recordAgentError(db, sessionId, errMsg);
+      await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', Date.now(), {
+        content: null,
+        stop_reason: 'error',
+        error: errMsg,
+      });
       res.status(502).json({ error: `Agent adapter error: ${errMsg}` });
       return;
     }
@@ -658,20 +1031,27 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       agentResponse.stop_reason === 'tool_use' && agentResponse.tool_calls?.length
         ? JSON.stringify({ __type: 'tool_use', content: agentResponse.content, tool_calls: agentResponse.tool_calls })
         : (agentResponse.content ?? '');
-    await db.addMessage(sessionId, 'assistant', assistantContent, agentResponse.usage.completion_tokens);
+    await db.addBranchMessage(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'assistant',
+      assistantContent,
+      agentResponse.usage.completion_tokens,
+    );
 
     // Tool-results continuations count tokens but NOT an additional interaction
     await db.updateSessionUsage(sessionId, agentResponse.usage.total_tokens, 0);
 
     // Record replay events
     const now = Date.now();
-    await db.addReplayEvent(sessionId, 'tool_result', now, { tool_results: toolResults });
-    await db.addReplayEvent(sessionId, 'agent_response', now, {
+    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'tool_result', now, { tool_results: toolResults });
+    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', now, {
       content: agentResponse.content,
       stop_reason: agentResponse.stop_reason,
       usage: agentResponse.usage,
     });
-    await db.addReplayEvent(sessionId, 'resource_usage', now, {
+    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'resource_usage', now, {
       prompt_tokens: agentResponse.usage.prompt_tokens,
       completion_tokens: agentResponse.usage.completion_tokens,
       total_tokens: agentResponse.usage.total_tokens,
@@ -689,13 +1069,15 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       tool_calls: agentResponse.tool_calls ?? [],
       usage: agentResponse.usage,
       constraints_remaining: updatedConstraints,
+      branch_id: branch.id,
+      turn_sequence: turnSequence,
     });
   }));
 
   // POST /api/sessions/:id/messages/stream — SSE agent loop (wires runAgentLoop server-side)
   router.post('/sessions/:id/messages/stream', requireToken(db), (req, res) => {
     const sessionId = req.params['id'] as string;
-    const body = req.body as { message?: unknown; agent_config?: unknown; mode?: unknown };
+    const body = req.body as { message?: unknown; agent_config?: unknown; mode?: unknown; branch_id?: unknown };
 
     if (typeof body.message !== 'string' || !body.message.trim()) {
       res.status(400).json({ error: 'message is required and must be a non-empty string' });
@@ -720,6 +1102,18 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         if (!session) { sendEvent('error', { error: 'Session not found' }); res.end(); return; }
         if (session.status !== 'active') { sendEvent('error', { error: 'Session is not active' }); res.end(); return; }
 
+        const branch = await resolveBranchOrRespond(
+          db,
+          res,
+          sessionId,
+          typeof body.branch_id === 'string' ? body.branch_id : undefined,
+        );
+        if (!branch) {
+          sendEvent('error', { error: 'Branch not found' });
+          res.end();
+          return;
+        }
+
         const elapsed = (Date.now() - session.created_at) / 1000;
         const timeLimitSeconds = session.constraint.time_limit_minutes * 60;
         if (
@@ -728,7 +1122,8 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
           elapsed >= timeLimitSeconds
         ) { sendEvent('error', { error: 'Session constraints exhausted' }); res.end(); return; }
 
-        const storedMessages = await db.getMessages(sessionId);
+        const turnSequence = await db.allocateTurnSequence(sessionId);
+        const storedMessages = await db.getBranchMessages(sessionId, branch.id);
         const history = createRequestHistory(storedMessages, mode, planFilePath);
         const constraints_remaining: ConstraintsRemaining = {
           tokens_remaining: Math.max(0, session.constraint.max_session_tokens - session.tokens_used),
@@ -738,14 +1133,23 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         const context: SessionContext = { session_id: sessionId, history, constraints_remaining };
 
         // Persist the user turn before entering the loop so it survives provider/tool failures.
-        await db.addMessage(sessionId, 'user', message, 0);
-        await db.addReplayEvent(sessionId, 'message', Date.now(), { role: 'user', content: message });
+        await db.addBranchMessage(sessionId, branch.id, turnSequence, 'user', message, 0);
+        await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'message', Date.now(), {
+          role: 'user',
+          content: message,
+        });
 
         const reqAdapter = await resolveAdapter(adapter, body.agent_config);
 
         const toolRunner: ToolRunner = (calls, description) => {
           const requestId = randomUUID();
-          sendEvent('tool_calls', { request_id: requestId, description, tool_calls: calls });
+          sendEvent('tool_calls', {
+            request_id: requestId,
+            description,
+            tool_calls: calls,
+            branch_id: branch.id,
+            turn_sequence: turnSequence,
+          });
           return new Promise<ToolResult[]>((resolve) => registerPendingTools(requestId, resolve));
         };
 
@@ -754,7 +1158,11 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
           loopResult = await runAgentLoop(message, context, reqAdapter, toolRunner);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : 'Agent loop error';
-          await recordAgentError(db, sessionId, errMsg);
+          await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', Date.now(), {
+            content: null,
+            stop_reason: 'error',
+            error: errMsg,
+          });
           sendEvent('error', { error: errMsg });
           res.end();
           return;
@@ -767,12 +1175,19 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
             content: action.description,
             tool_calls: action.tool_calls,
           });
-          await db.addMessage(sessionId, 'assistant', encoded, 0);
-          await db.addMessage(sessionId, 'tool', JSON.stringify(action.tool_results), 0);
+          await db.addBranchMessage(sessionId, branch.id, turnSequence, 'assistant', encoded, 0);
+          await db.addBranchMessage(sessionId, branch.id, turnSequence, 'tool', JSON.stringify(action.tool_results), 0);
         }
 
         // Persist final assistant message
-        await db.addMessage(sessionId, 'assistant', loopResult.content ?? '', loopResult.total_usage.completion_tokens);
+        await db.addBranchMessage(
+          sessionId,
+          branch.id,
+          turnSequence,
+          'assistant',
+          loopResult.content ?? '',
+          loopResult.total_usage.completion_tokens,
+        );
 
         // 1 interaction for the full agent turn; all LLM calls' tokens aggregated
         await db.updateSessionUsage(sessionId, loopResult.total_usage.total_tokens, 1);
@@ -780,18 +1195,20 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         // Record replay events
         const now = Date.now();
         for (const action of loopResult.tool_actions) {
-          await db.addReplayEvent(sessionId, 'tool_call', now, {
+          await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'tool_call', now, {
             description: action.description,
             tool_calls: action.tool_calls,
           });
-          await db.addReplayEvent(sessionId, 'tool_result', now, { tool_results: action.tool_results });
+          await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'tool_result', now, {
+            tool_results: action.tool_results,
+          });
         }
-        await db.addReplayEvent(sessionId, 'agent_response', now, {
+        await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', now, {
           content: loopResult.content,
           stop_reason: loopResult.stop_reason,
           usage: loopResult.total_usage,
         });
-        await db.addReplayEvent(sessionId, 'resource_usage', now, loopResult.total_usage);
+        await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'resource_usage', now, loopResult.total_usage);
 
         const updatedConstraints: ConstraintsRemaining = {
           tokens_remaining: Math.max(0, constraints_remaining.tokens_remaining - loopResult.total_usage.total_tokens),
@@ -805,6 +1222,8 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
           tool_actions: loopResult.tool_actions,
           usage: loopResult.total_usage,
           constraints_remaining: updatedConstraints,
+          branch_id: branch.id,
+          turn_sequence: turnSequence,
         });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -839,14 +1258,25 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
   // GET /api/sessions/:id/messages — full conversation history
   router.get('/sessions/:id/messages', requireToken(db), asyncRoute(async (req, res) => {
-    const session = await db.getSession(req.params['id'] as string);
+    const sessionId = req.params['id'] as string;
+    const session = await db.getSession(sessionId);
     if (!session) {
       res.status(404).json({ error: 'Session not found' });
       return;
     }
 
-    const messages = await db.getMessages(req.params['id'] as string);
-    res.json({ messages });
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof req.query['branch_id'] === 'string' ? req.query['branch_id'] : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const messages = await db.getBranchMessages(sessionId, branch.id);
+    res.json({ messages, branch, branches: await db.listBranches(sessionId) });
   }));
 
   // GET /api/sessions/:id/replay — session recording for review
@@ -858,13 +1288,24 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       return;
     }
 
-    const stored = await db.getReplayEvents(sessionId);
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof req.query['branch_id'] === 'string' ? req.query['branch_id'] : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const stored = await db.getBranchReplayEvents(sessionId, branch.id);
     const recording = {
       session_id: sessionId,
+      branch_id: branch.id,
       events: stored.map((e) => ({ type: e.type, timestamp: e.timestamp, payload: e.payload })),
     };
 
-    res.json(recording);
+    res.json({ ...recording, branch, branches: await db.listBranches(sessionId) });
   }));
 
   // GET /api/review/:id — aggregate review data for replay dashboard
@@ -876,11 +1317,23 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       return;
     }
 
-    const storedMessages = await db.getMessages(sessionId);
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof req.query['branch_id'] === 'string' ? req.query['branch_id'] : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const storedMessages = await db.getBranchMessages(sessionId, branch.id);
     const messages = buildHistory(storedMessages);
-    const storedEvents = await db.getReplayEvents(sessionId);
+    const storedEvents = await db.getBranchReplayEvents(sessionId, branch.id);
+    const workspaceSnapshot = await db.getWorkspaceSnapshot(sessionId, branch.id);
     const recording = {
       session_id: sessionId,
+      branch_id: branch.id,
       events: storedEvents.map((event) => ({
         type: event.type,
         timestamp: event.timestamp,
@@ -896,6 +1349,9 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       metrics,
       recording,
       prompt,
+      branch,
+      branches: await db.listBranches(sessionId),
+      workspace_snapshot: workspaceSnapshot,
     });
   }));
 

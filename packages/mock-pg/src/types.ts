@@ -75,6 +75,24 @@ export interface BridgeStateFile {
   pools: InspectablePoolState[];
 }
 
+export interface PoolExportState {
+  id: string;
+  name: string;
+  tables: Array<{
+    name: string;
+    columns: ColumnSnapshot[];
+    rows: QueryRow[];
+  }>;
+  indexes: IndexSnapshot[];
+  recentQueries: QueryLogEntry[];
+}
+
+export interface BridgeExportFile {
+  version: 1;
+  updatedAt: number;
+  pools: PoolExportState[];
+}
+
 export type QueryOperation =
   | 'create_table'
   | 'create_index'

@@ -28,6 +28,14 @@ export interface ReviewSessionSummary {
 
 export interface ReviewDataPayload {
   session: ReviewSessionSummary;
+  branch?: {
+    id: string;
+    name: string;
+  };
+  branches?: Array<{
+    id: string;
+    name: string;
+  }>;
   metrics: ReviewMetric[];
   recording: {
     session_id: string;
@@ -40,6 +48,10 @@ export interface ReviewDataPayload {
     tool_results?: Array<{ tool_call_id: string; name: string; output: string; is_error: boolean }>;
   }>;
   prompt?: ReviewPromptSummary | null;
+  workspace_snapshot?: {
+    active_path?: string;
+    filesystem: Array<{ path: string; encoding: 'utf-8' | 'base64'; content: string }>;
+  } | null;
 }
 
 export interface ReviewMessage {

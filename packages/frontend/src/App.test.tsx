@@ -1,12 +1,27 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { App } from './App.js';
 
-const { mockWriteFile, mockReadFile, mockIdePanel } = vi.hoisted(() => ({
+const {
+  mockWriteFile,
+  mockReadFile,
+  mockIdePanel,
+  mockValidateSession,
+  mockRestoreFiles,
+  mockLoadSession,
+  mockSaveSession,
+  mockClearSession,
+} = vi.hoisted(() => ({
   mockWriteFile: vi.fn().mockResolvedValue(undefined),
   mockReadFile: vi.fn().mockResolvedValue('# Approved plan'),
   mockIdePanel: vi.fn(),
+  mockValidateSession: vi.fn(),
+  mockRestoreFiles: vi.fn().mockResolvedValue(null),
+  mockLoadSession: vi.fn().mockReturnValue(null),
+  mockSaveSession: vi.fn(),
+  mockClearSession: vi.fn(),
 }));
 
 vi.mock('./components/DevSetup.js', () => ({
@@ -221,10 +236,21 @@ vi.mock('./lib/webcontainer.js', () => ({
   getWebContainer: vi.fn().mockResolvedValue(null),
   readFile: mockReadFile,
   writeFile: mockWriteFile,
+  watchFiles: vi.fn().mockResolvedValue(() => undefined),
+  captureWorkspaceSnapshot: vi.fn().mockResolvedValue([]),
+  readMockPgExportState: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('./lib/review-replay.js', () => ({
   getReviewSessionId: () => null,
+}));
+
+vi.mock('./lib/session-persist.js', () => ({
+  saveSession: mockSaveSession,
+  loadSession: mockLoadSession,
+  clearSession: mockClearSession,
+  validateSession: mockValidateSession,
+  restoreFiles: mockRestoreFiles,
 }));
 
 describe('App prompt display', () => {
@@ -240,7 +266,52 @@ describe('App prompt display', () => {
       }),
     });
     window.history.replaceState({}, '', '/');
-    vi.stubGlobal('fetch', vi.fn());
+    mockValidateSession.mockResolvedValue({
+      status: 'active',
+      stats: {
+        tokensUsed: 0,
+        maxTokens: 50000,
+        interactionsUsed: 0,
+        maxInteractions: 30,
+        startedAt: 1000,
+        timeSpentSeconds: 0,
+      },
+      constraints: {
+        tokensRemaining: 50000,
+        interactionsRemaining: 30,
+        secondsRemaining: 3600,
+        maxTokens: 50000,
+        maxInteractions: 30,
+        timeLimitSeconds: 3600,
+      },
+      branch: {
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      },
+      branches: [{
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      }],
+    });
+    mockRestoreFiles.mockResolvedValue(null);
+    mockLoadSession.mockReturnValue(null);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/close')) {
+        return {
+          ok: true,
+          json: async () => ({ status: 'completed' }),
+        } as unknown as Response;
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({ error: 'Not found' }),
+      } as unknown as Response;
+    }));
   });
 
   test('opens prompt instructions in the IDE when a session starts and the top bar action is used', async () => {
@@ -326,33 +397,56 @@ describe('App prompt display', () => {
   });
 
   test('shows submitted modal after submit instead of routing to review', async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ status: 'completed' }),
-      } as unknown as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          session: {
-            status: 'completed',
-            created_at: 1000,
-            closed_at: 61000,
-            tokens_used: 1200,
-            interactions_used: 7,
-            constraint: {
-              max_session_tokens: 50000,
-              max_interactions: 30,
-              time_limit_minutes: 60,
-            },
-          },
-          constraints_remaining: {
-            tokens_remaining: 48800,
-            interactions_remaining: 23,
-            seconds_remaining: 3500,
-          },
-        }),
-      } as unknown as Response);
+    mockValidateSession.mockResolvedValueOnce({
+      status: 'active',
+      stats: {
+        tokensUsed: 0,
+        maxTokens: 50000,
+        interactionsUsed: 0,
+        maxInteractions: 30,
+        startedAt: 1000,
+        timeSpentSeconds: 0,
+      },
+      constraints: {
+        tokensRemaining: 50000,
+        interactionsRemaining: 30,
+        secondsRemaining: 3600,
+        maxTokens: 50000,
+        maxInteractions: 30,
+        timeLimitSeconds: 3600,
+      },
+      branch: {
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      },
+      branches: [{
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      }],
+    }).mockResolvedValueOnce({
+      status: 'submitted',
+      stats: {
+        tokensUsed: 1200,
+        maxTokens: 50000,
+        interactionsUsed: 7,
+        maxInteractions: 30,
+        startedAt: 1000,
+        submittedAt: 61000,
+        timeSpentSeconds: 60,
+      },
+      branch: {
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      },
+      branches: [{
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      }],
+    });
 
     render(<App />);
 
@@ -397,42 +491,67 @@ describe('App prompt display', () => {
   });
 
   test('reopens a completed saved session into the submitted modal', async () => {
-    localStorage.setItem('lintic_session', JSON.stringify({
+    mockLoadSession.mockReturnValue({
       sessionId: 'sess-1',
       sessionToken: 'tok-1',
       prompt: {
         id: 'prompt-1',
         title: 'Build a task runner',
       },
-    }));
-
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        session: {
-          status: 'completed',
-          created_at: 1000,
-          closed_at: 121000,
-          tokens_used: 2000,
-          interactions_used: 9,
-          constraint: {
-            max_session_tokens: 50000,
-            max_interactions: 30,
-            time_limit_minutes: 60,
-          },
-        },
-        constraints_remaining: {
-          tokens_remaining: 48000,
-          interactions_remaining: 21,
-          seconds_remaining: 0,
-        },
-      }),
-    } as unknown as Response);
+    });
+    mockValidateSession.mockResolvedValue({
+      status: 'submitted',
+      stats: {
+        tokensUsed: 2000,
+        maxTokens: 50000,
+        interactionsUsed: 9,
+        maxInteractions: 30,
+        startedAt: 1000,
+        submittedAt: 121000,
+        timeSpentSeconds: 120,
+      },
+      branch: {
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      },
+      branches: [{
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      }],
+    });
 
     render(<App />);
 
     await waitFor(() => {
       expect(screen.getByTestId('submitted-modal')).toBeInTheDocument();
     });
+  });
+
+  test('restores a saved session only once under StrictMode', async () => {
+    mockLoadSession.mockReturnValue({
+      sessionId: 'sess-1',
+      sessionToken: 'tok-1',
+      prompt: {
+        id: 'prompt-1',
+        title: 'Build a task runner',
+      },
+      branchId: 'main',
+    });
+
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('split-pane')).toBeInTheDocument();
+    });
+
+    expect(mockValidateSession).toHaveBeenCalledTimes(1);
+    expect(mockRestoreFiles).toHaveBeenCalledTimes(1);
+    expect(mockRestoreFiles).toHaveBeenCalledWith('sess-1', 'tok-1', 'main');
   });
 });

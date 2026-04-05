@@ -3,12 +3,14 @@ import { MockPgError } from './types.js';
 import { parseSql } from './parser.js';
 import type {
   BridgeCommand,
+  BridgeExportFile,
   BridgeResponse,
   BridgeStateFile,
   IndexSnapshot,
   InspectablePoolState,
   PoolClient,
   PoolConfig,
+  PoolExportState,
   PoolEvent,
   PoolEventListener,
   PoolSnapshot,
@@ -51,6 +53,8 @@ interface ExecutionContext {
 
 interface ResolvedBridgeConfig {
   statePath: string;
+  exportPath: string;
+  bootstrapPath: string;
   commandsDir: string;
   responsesDir: string;
   pollMs: number;
@@ -61,6 +65,8 @@ type FsModule = typeof import('node:fs/promises');
 const DEFAULT_BRIDGE_ROOT = '.lintic/mock-pg';
 const DEFAULT_BRIDGE_CONFIG: ResolvedBridgeConfig = {
   statePath: `${DEFAULT_BRIDGE_ROOT}/state.json`,
+  exportPath: `${DEFAULT_BRIDGE_ROOT}/export.json`,
+  bootstrapPath: `${DEFAULT_BRIDGE_ROOT}/bootstrap.json`,
   commandsDir: `${DEFAULT_BRIDGE_ROOT}/commands`,
   responsesDir: `${DEFAULT_BRIDGE_ROOT}/responses`,
   pollMs: 200,
@@ -71,6 +77,7 @@ let poolCounter = 1;
 let fsModulePromise: Promise<FsModule> | null = null;
 let bridgePoller: ReturnType<typeof setInterval> | null = null;
 let bridgeSyncInFlight = false;
+let bridgeSyncPromise: Promise<void> | null = null;
 let activeBridgeConfig: ResolvedBridgeConfig | null = null;
 
 function normalizeName(value: string): string {
@@ -140,8 +147,14 @@ function resolveBridgeConfig(config: PoolConfig['bridge']): ResolvedBridgeConfig
     return { ...DEFAULT_BRIDGE_CONFIG };
   }
 
+  const statePath = config.statePath ?? DEFAULT_BRIDGE_CONFIG.statePath;
+  const lastSlash = statePath.lastIndexOf('/');
+  const bridgeRoot = lastSlash >= 0 ? statePath.slice(0, lastSlash) : DEFAULT_BRIDGE_ROOT;
+
   return {
-    statePath: config.statePath ?? DEFAULT_BRIDGE_CONFIG.statePath,
+    statePath,
+    exportPath: `${bridgeRoot}/export.json`,
+    bootstrapPath: `${bridgeRoot}/bootstrap.json`,
     commandsDir: config.commandsDir ?? DEFAULT_BRIDGE_CONFIG.commandsDir,
     responsesDir: config.responsesDir ?? DEFAULT_BRIDGE_CONFIG.responsesDir,
     pollMs: config.pollMs ?? DEFAULT_BRIDGE_CONFIG.pollMs,
@@ -158,6 +171,8 @@ async function getFsModule(): Promise<FsModule> {
 async function ensureBridgeDirectories(fs: FsModule, config: ResolvedBridgeConfig): Promise<void> {
   const path = await import('node:path');
   await fs.mkdir(path.dirname(config.statePath), { recursive: true });
+  await fs.mkdir(path.dirname(config.exportPath), { recursive: true });
+  await fs.mkdir(path.dirname(config.bootstrapPath), { recursive: true });
   await fs.mkdir(config.commandsDir, { recursive: true });
   await fs.mkdir(config.responsesDir, { recursive: true });
 }
@@ -188,6 +203,15 @@ async function writeBridgeStateFile(fs: FsModule, config: ResolvedBridgeConfig):
     pools: getBridgePools().map((pool) => pool.getInspectorState()),
   };
   await fs.writeFile(config.statePath, JSON.stringify(state, null, 2), 'utf-8');
+}
+
+async function writeBridgeExportFile(fs: FsModule, config: ResolvedBridgeConfig): Promise<void> {
+  const state: BridgeExportFile = {
+    version: 1,
+    updatedAt: Date.now(),
+    pools: getBridgePools().map((pool) => pool.exportState()),
+  };
+  await fs.writeFile(config.exportPath, JSON.stringify(state, null, 2), 'utf-8');
 }
 
 async function processBridgeCommands(fs: FsModule, config: ResolvedBridgeConfig): Promise<void> {
@@ -260,19 +284,28 @@ async function processBridgeCommands(fs: FsModule, config: ResolvedBridgeConfig)
 
 async function syncBridgeStateAndCommands(): Promise<void> {
   if (bridgeSyncInFlight || activeBridgeConfig === null) {
-    return;
+    return bridgeSyncPromise ?? Promise.resolve();
   }
 
   const config = activeBridgeConfig;
   bridgeSyncInFlight = true;
-  try {
-    const fs = await getFsModule();
-    await ensureBridgeDirectories(fs, config);
-    await processBridgeCommands(fs, config);
-    await writeBridgeStateFile(fs, config);
-  } finally {
-    bridgeSyncInFlight = false;
-  }
+  bridgeSyncPromise = (async () => {
+    try {
+      const fs = await getFsModule();
+      await ensureBridgeDirectories(fs, config);
+      await processBridgeCommands(fs, config);
+      await writeBridgeStateFile(fs, config);
+      await writeBridgeExportFile(fs, config);
+    } finally {
+      bridgeSyncInFlight = false;
+      bridgeSyncPromise = null;
+    }
+  })();
+  return bridgeSyncPromise;
+}
+
+function escapeIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
 }
 
 class PoolClientImpl implements PoolClient {
@@ -318,6 +351,7 @@ export class Pool {
   private readonly maxRecentQueries: number;
   private readonly slowQueryThresholdMs: number | undefined;
   private readonly onSlowQuery: ((record: SlowQueryRecord) => void) | undefined;
+  private readonly bootstrapPromise: Promise<void>;
   private ended = false;
   private nextClientId = 1;
 
@@ -336,7 +370,10 @@ export class Pool {
     registeredPools.set(this.id, this);
     if (this.bridgeConfig) {
       startBridgeIfNeeded(this.bridgeConfig);
+      this.bootstrapPromise = this.loadBootstrapState();
       void syncBridgeStateAndCommands();
+    } else {
+      this.bootstrapPromise = Promise.resolve();
     }
 
     this.subscriptions.push(
@@ -359,6 +396,7 @@ export class Pool {
   }
 
   async query<R extends QueryRow = QueryRow>(sql: string, params: PrimitiveValue[] = []): Promise<QueryResult<R>> {
+    await this.bootstrapPromise;
     this.assertUsable();
     const client = await this.connect();
     try {
@@ -369,6 +407,7 @@ export class Pool {
   }
 
   async connect(): Promise<PoolClient> {
+    await this.bootstrapPromise;
     this.assertUsable();
 
     let clientId: number;
@@ -420,6 +459,9 @@ export class Pool {
         clearInterval(bridgePoller);
         bridgePoller = null;
         activeBridgeConfig = null;
+        if (bridgeSyncPromise) {
+          await bridgeSyncPromise;
+        }
       } else {
         void syncBridgeStateAndCommands();
       }
@@ -436,6 +478,79 @@ export class Pool {
 
   getRecentQueries(): QueryLogEntry[] {
     return this.recentQueries.map((query) => ({ ...query, params: [...query.params] }));
+  }
+
+  exportState(): PoolExportState {
+    return {
+      id: this.id,
+      name: this.name,
+      tables: this.getTableDataSnapshots().map((table) => ({
+        name: table.name,
+        columns: table.columns,
+        rows: table.rows.map((row) => ({ ...row })),
+      })),
+      indexes: this.getIndexSnapshots(),
+      recentQueries: this.getRecentQueries(),
+    };
+  }
+
+  async importState(state: PoolExportState): Promise<void> {
+    await this.bootstrapPromise;
+    await this.importStateInternal(state);
+  }
+
+  private async importStateInternal(state: PoolExportState): Promise<void> {
+    const rawClient = new this.RawClient();
+    await rawClient.connect();
+    try {
+      for (const tableName of [...this.getTableNames()].reverse()) {
+        await rawClient.query(`DROP TABLE IF EXISTS ${escapeIdentifier(tableName)} CASCADE`);
+      }
+
+      for (const table of state.tables) {
+        const columnsSql = table.columns
+          .map((column) => `${escapeIdentifier(column.name)} ${column.type}${column.primaryKey ? ' PRIMARY KEY' : ''}`)
+          .join(', ');
+        await rawClient.query(`CREATE TABLE ${escapeIdentifier(table.name)} (${columnsSql})`);
+      }
+
+      for (const index of state.indexes) {
+        if (index.kind === 'primary') {
+          continue;
+        }
+        const columnsSql = index.columns.map(escapeIdentifier).join(', ');
+        await rawClient.query(
+          `CREATE INDEX ${escapeIdentifier(index.name)} ON ${escapeIdentifier(index.table)} (${columnsSql})`,
+        );
+      }
+
+      for (const table of state.tables) {
+        for (const row of table.rows) {
+          const columns = Object.keys(row);
+          if (columns.length === 0) {
+            continue;
+          }
+          const values = columns.map((column) => row[column] ?? null);
+          const placeholders = values.map((_value, index) => `$${index + 1}`).join(', ');
+          const columnsSql = columns.map(escapeIdentifier).join(', ');
+          await rawClient.query(
+            `INSERT INTO ${escapeIdentifier(table.name)} (${columnsSql}) VALUES (${placeholders})`,
+            values,
+          );
+        }
+      }
+
+      this.recentQueries.splice(0, this.recentQueries.length, ...state.recentQueries.map((query) => ({
+        ...query,
+        params: [...query.params],
+      })));
+    } finally {
+      await rawClient.end();
+    }
+
+    if (this.bridgeConfig) {
+      void syncBridgeStateAndCommands();
+    }
   }
 
   getTableRows(tableName: string): QueryRow[] {
@@ -478,6 +593,7 @@ export class Pool {
   }
 
   async executeWithClient<R extends QueryRow = QueryRow>(rawClient: RawClient, sql: string, params: PrimitiveValue[] = []): Promise<QueryResult<R>> {
+    await this.bootstrapPromise;
     this.assertUsable();
     const description = inferQueryDescription(sql);
     const execution: ExecutionContext = {
@@ -658,11 +774,45 @@ export class Pool {
       listener(event);
     }
   }
+
+  private async loadBootstrapState(): Promise<void> {
+    if (!this.bridgeConfig) {
+      return;
+    }
+
+    const fs = await getFsModule();
+    const raw = await fs.readFile(this.bridgeConfig.bootstrapPath, 'utf-8').catch(() => null);
+    if (!raw) {
+      return;
+    }
+
+    let bootstrap: BridgeExportFile | { pools?: PoolExportState[] };
+    try {
+      bootstrap = JSON.parse(raw) as BridgeExportFile | { pools?: PoolExportState[] };
+    } catch {
+      return;
+    }
+
+    const pools = Array.isArray(bootstrap.pools) ? bootstrap.pools : [];
+    const match = pools.find((pool) => pool.name === this.name || pool.id === this.id);
+    if (!match) {
+      return;
+    }
+
+    await this.importStateInternal(match);
+    const remaining = pools.filter((pool) => pool !== match);
+    await fs.writeFile(
+      this.bridgeConfig.bootstrapPath,
+      JSON.stringify({ version: 1, updatedAt: Date.now(), pools: remaining }, null, 2),
+      'utf-8',
+    ).catch(() => undefined);
+  }
 }
 
 export type {
   BridgeCommand,
   BridgeConfig,
+  BridgeExportFile,
   BridgeResponse,
   BridgeStateFile,
   ColumnSnapshot,
@@ -673,6 +823,7 @@ export type {
   PoolConfig,
   PoolEvent,
   PoolEventListener,
+  PoolExportState,
   PoolSnapshot,
   PoolStatsSnapshot,
   PrimitiveValue,
