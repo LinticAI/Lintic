@@ -472,7 +472,7 @@ export function ChatPanel({
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--color-bg-chat)' }}>
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 flex flex-col gap-2 relative">
+      <div className="relative flex flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
         {messages.length === 0 && !loading && (
           <div
             className="flex-1 flex items-center justify-center text-xs opacity-40 pt-12"
@@ -502,9 +502,9 @@ export function ChatPanel({
             if (isUser) {
               const msg = group.messages[0]!;
               return (
-                <div key={msg.id} className="flex flex-col py-0.5">
+                <div key={msg.id} className="flex flex-col py-1">
                   <div
-                    className="w-full rounded-[18px] px-5 py-3 text-[14px] whitespace-pre-wrap break-words border-none shadow-none"
+                    className="w-full rounded-[var(--assessment-radius-shell)] px-6 py-4 text-[14px] whitespace-pre-wrap break-words border-none shadow-none"
                     style={{ background: 'var(--color-bg-user-msg)', color: 'var(--color-text-user-msg)' }}
                     data-testid="user-message"
                   >
@@ -533,7 +533,7 @@ export function ChatPanel({
             }
 
             return (
-              <div key={`group-${groupIdx}`} className="flex flex-col gap-1 py-0.5">
+              <div key={`group-${groupIdx}`} className="flex flex-col gap-1.5 py-1">
                 {allToolActions.length > 0 && (
                   <div className="w-full px-1" data-testid="tool-actions-container">
                     <ToolActionCard action={allToolActions} />
@@ -554,7 +554,7 @@ export function ChatPanel({
         })()}
 
         {loading && (
-          <div className="flex items-start gap-2 py-2">
+          <div className="flex items-start gap-2 py-3">
             <div
               data-testid="loading-spinner"
               className="flex gap-2 items-center px-5 py-3 rounded-full"
@@ -569,7 +569,7 @@ export function ChatPanel({
 
         {error && (
           <div
-            className="text-xs px-6 py-4 rounded-[25px] flex items-center gap-3"
+            className="flex items-center gap-3 rounded-[var(--assessment-radius-shell)] px-6 py-4 text-xs"
             style={{ background: 'var(--color-bg-error)', color: 'var(--color-status-error)' }}
           >
             <AlertCircle size={16} />
@@ -581,9 +581,9 @@ export function ChatPanel({
       </div>
 
       {/* Input Section */}
-      <div className="shrink-0 px-4 pt-4">
+      <div className="shrink-0 px-5 pt-4">
         <div
-          className="rounded-[25px] pt-5 pb-2 pl-5 pr-5 flex flex-col gap-5 border-none"
+          className="flex flex-col gap-5 rounded-[var(--assessment-radius-shell)] border-none px-5 pt-5 pb-3"
           style={{
             background: 'var(--color-bg-input)',
             boxShadow: '0 8px 30px rgba(0,0,0,0.2)'
@@ -633,7 +633,7 @@ export function ChatPanel({
                       data-testid={`mode-toggle-${option}`}
                       onClick={() => onModeChange?.(option)}
                       disabled={loading}
-                      className="px-3 py-1.5 rounded-full text-[12px] font-semibold transition-colors"
+                      className="rounded-[var(--assessment-radius-pill)] px-3 py-1.5 text-[12px] font-semibold transition-colors"
                       style={{
                         background: active ? '#FFFFFF' : 'transparent',
                         color: active ? '#000000' : 'rgba(255,255,255,0.6)',
@@ -654,7 +654,7 @@ export function ChatPanel({
                   type="button"
                   data-testid="approve-plan"
                   onClick={() => void approvePlan()}
-                  className="px-3 py-1.5 rounded-full flex items-center justify-center text-[12px] font-semibold transition-all hover:scale-[1.03]"
+                  className="flex items-center justify-center rounded-[var(--assessment-radius-pill)] px-3 py-1.5 text-[12px] font-semibold transition-all hover:scale-[1.03]"
                   style={{
                     background: 'rgba(16,185,129,0.15)',
                     color: '#6EE7B7',
@@ -666,7 +666,7 @@ export function ChatPanel({
               {loading ? (
                 <button
                   type="button"
-                  className="w-10 h-10 rounded-full flex items-center justify-center transition-colors hover:bg-red-500/20"
+                  className="flex h-10 w-10 items-center justify-center rounded-[var(--assessment-radius-pill)] transition-colors hover:bg-red-500/20"
                   style={{ background: 'var(--color-bg-stop-btn)', color: 'var(--color-status-error-text)' }}
                   onClick={stopAgent}
                   aria-label="Stop agent"
@@ -677,7 +677,7 @@ export function ChatPanel({
               ) : (
                 <button
                   type="button"
-                  className="px-3 py-1.5 rounded-full flex items-center justify-center gap-2 text-[12px] font-semibold transition-all hover:scale-[1.05]"
+                  className="flex items-center justify-center gap-2 rounded-[var(--assessment-radius-pill)] px-3 py-1.5 text-[12px] font-semibold transition-all hover:scale-[1.05]"
                   style={{
                     background: exhausted || !input.trim() ? 'rgba(255,255,255,0.05)' : '#FFFFFF',
                     color: exhausted || !input.trim() ? 'rgba(255,255,255,0.2)' : '#000000',

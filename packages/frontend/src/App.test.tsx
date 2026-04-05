@@ -79,6 +79,21 @@ vi.mock('./components/IdePanel.js', () => ({
   },
 }));
 
+vi.mock('./components/DatabasePanel.js', () => ({
+  DatabasePanel: ({ onOpenSetupFile }: { onOpenSetupFile?: (path: string) => void }) => (
+    <div data-testid="database-panel">
+      DB
+      <button
+        type="button"
+        data-testid="mock-db-setup"
+        onClick={() => onOpenSetupFile?.('src/lib/mock-postgres.js')}
+      >
+        Setup
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock('./components/ChatPanel.js', () => ({
   ChatPanel: ({
     onLoadingChange,
@@ -260,6 +275,27 @@ describe('App prompt display', () => {
 
     await waitFor(() => {
       expect(mockReadFile).toHaveBeenCalledWith('plans/2026-04-04-101500-plan.md');
+    });
+  });
+
+  test('switches the workspace sidebar to the database panel', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId('mock-start-session'));
+    fireEvent.click(screen.getByRole('button', { name: 'Database' }));
+
+    expect(screen.getByTestId('database-panel')).toBeInTheDocument();
+  });
+
+  test('opens the generated postgres helper in the IDE when setup starts from the database panel', async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId('mock-start-session'));
+    fireEvent.click(screen.getByRole('button', { name: 'Database' }));
+    fireEvent.click(screen.getByTestId('mock-db-setup'));
+
+    await waitFor(() => {
+      expect(mockIdePanel).toHaveBeenLastCalledWith(expect.stringMatching(/^src\/lib\/mock-postgres\.js-/));
     });
   });
 

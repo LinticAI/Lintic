@@ -53,9 +53,38 @@
   /* Border Radius */
   --radius-xs: 8px;
   --radius-sm: 12px;
-  --radius-md: 25px;
-  --radius-lg: 32px;
-  --radius-xl: 40px;
+  --radius-md: 12px;
+  --radius-lg: 12px;
+  --radius-xl: 12px;
+
+  /* Database Workspace */
+  --db-surface-canvas: #121212;
+  --db-surface-panel: #171717;
+  --db-surface-subtle: #141414;
+  --db-surface-elevated: #1b1b1b;
+  --db-surface-selection: rgba(56, 135, 206, 0.14);
+  --db-surface-selection-strong: rgba(56, 135, 206, 0.18);
+  --db-border-subtle: rgba(255, 255, 255, 0.04);
+  --db-border-default: rgba(255, 255, 255, 0.07);
+  --db-border-strong: rgba(255, 255, 255, 0.12);
+  --db-text-primary: #f5f5f5;
+  --db-text-secondary: #a3a3a3;
+  --db-text-tertiary: #6b7280;
+  --db-text-quiet: #52525b;
+  --db-radius-surface: 12px;
+  --db-radius-control: 12px;
+  --db-radius-item: 12px;
+  --db-shadow-overlay: 0 18px 50px rgba(0, 0, 0, 0.38);
+  --db-ring-focus: #60a5fa;
+  --db-accent: #3887ce;
+  --db-accent-foreground: #f7fbff;
+  --db-danger-surface: rgba(127, 29, 29, 0.28);
+  --db-danger-text: #fca5a5;
+
+  /* Assessment Shell */
+  --assessment-radius-shell: 18px;
+  --assessment-radius-control: 14px;
+  --assessment-radius-pill: 16px;
 }
 
 @layer base {
@@ -134,4 +163,127 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+@layer components {
+  .db-tab {
+    border-radius: var(--db-radius-control);
+    color: var(--db-text-tertiary);
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .db-tab[data-active="true"] {
+    background: var(--db-surface-panel);
+    color: var(--db-text-primary);
+    box-shadow: inset 0 0 0 1px var(--db-border-default);
+  }
+
+  .db-surface {
+    background: var(--db-surface-panel);
+    border: 1px solid var(--db-border-default);
+    border-radius: var(--db-radius-surface);
+  }
+
+  .db-surface-subtle {
+    background: var(--db-surface-subtle);
+    border: 1px solid var(--db-border-subtle);
+    border-radius: var(--db-radius-surface);
+  }
+
+  .db-control {
+    background: var(--db-surface-subtle);
+    border: 1px solid var(--db-border-default);
+    border-radius: var(--db-radius-control);
+    color: var(--db-text-primary);
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .db-control:hover {
+    border-color: var(--db-border-strong);
+    background: var(--db-surface-elevated);
+  }
+
+  .db-control:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--db-ring-focus);
+  }
+
+  .db-menu {
+    background: var(--db-surface-panel);
+    border: 1px solid var(--db-border-default);
+    border-radius: var(--db-radius-surface);
+    box-shadow: var(--db-shadow-overlay);
+  }
+
+  .db-menu-option {
+    border-radius: var(--db-radius-item);
+    color: var(--db-text-secondary);
+    transition:
+      background-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .db-menu-option:hover {
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--db-text-primary);
+  }
+
+  .db-menu-option[data-selected="true"] {
+    background: var(--db-surface-selection-strong);
+    color: var(--db-text-primary);
+    box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.12);
+  }
+
+  .db-action-secondary {
+    border-radius: var(--db-radius-control);
+    color: var(--db-text-secondary);
+    transition:
+      background-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .db-action-secondary:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--db-text-primary);
+  }
+
+  .db-action-primary {
+    border-radius: var(--db-radius-control);
+    background: var(--db-accent);
+    color: var(--db-accent-foreground);
+    transition:
+      background-color 160ms ease,
+      opacity 160ms ease;
+  }
+
+  .db-action-primary:hover {
+    background: #4a97db;
+  }
+
+  .db-action-primary:disabled {
+    background: #1b2430;
+    color: #7f8ea3;
+  }
+
+  .db-table-row {
+    transition: background-color 140ms ease;
+  }
+
+  .db-table-row:hover {
+    background: rgba(255, 255, 255, 0.02);
+  }
+}
+
+@layer utilities {
+  .rounded-xl,
+  .rounded-2xl,
+  .rounded-3xl {
+    border-radius: var(--radius-md);
+  }
 }

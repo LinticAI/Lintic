@@ -11,7 +11,16 @@ export interface PoolConfig {
   max?: number;
   slowQueryThresholdMs?: number;
   maxRecentQueries?: number;
+  name?: string;
+  bridge?: boolean | BridgeConfig;
   onSlowQuery?: (record: SlowQueryRecord) => void;
+}
+
+export interface BridgeConfig {
+  statePath?: string;
+  commandsDir?: string;
+  responsesDir?: string;
+  pollMs?: number;
 }
 
 export interface ColumnSnapshot {
@@ -24,6 +33,10 @@ export interface TableSnapshot {
   name: string;
   columns: ColumnSnapshot[];
   rowCount: number;
+}
+
+export interface TableDataSnapshot extends TableSnapshot {
+  rows: QueryRow[];
 }
 
 export type IndexKind = 'primary' | 'index';
@@ -46,6 +59,20 @@ export interface PoolSnapshot {
   stats: PoolStatsSnapshot;
   tables: TableSnapshot[];
   indexes: IndexSnapshot[];
+}
+
+export interface InspectablePoolState {
+  id: string;
+  name: string;
+  snapshot: PoolSnapshot;
+  tables: TableDataSnapshot[];
+  recentQueries: QueryLogEntry[];
+}
+
+export interface BridgeStateFile {
+  version: 1;
+  updatedAt: number;
+  pools: InspectablePoolState[];
 }
 
 export type QueryOperation =
@@ -77,6 +104,27 @@ export interface SlowQueryRecord {
   whereColumns: string[];
   reason: SlowQueryReason;
   timestamp: number;
+}
+
+export interface BridgeCommand {
+  id: string;
+  poolId?: string;
+  sql: string;
+  params?: PrimitiveValue[];
+  createdAt: number;
+}
+
+export interface BridgeResponse {
+  id: string;
+  poolId: string;
+  ok: boolean;
+  result?: QueryResult;
+  error?: {
+    message: string;
+    code?: string;
+  };
+  createdAt: number;
+  completedAt: number;
 }
 
 export interface PoolEventMap {

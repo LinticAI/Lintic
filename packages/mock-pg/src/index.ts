@@ -2,7 +2,11 @@ import { newDb, type IMemoryDb, type ISubscription } from 'pg-mem';
 import { MockPgError } from './types.js';
 import { parseSql } from './parser.js';
 import type {
+  BridgeCommand,
+  BridgeResponse,
+  BridgeStateFile,
   IndexSnapshot,
+  InspectablePoolState,
   PoolClient,
   PoolConfig,
   PoolEvent,
@@ -15,6 +19,7 @@ import type {
   QueryResult,
   QueryRow,
   SlowQueryRecord,
+  TableDataSnapshot,
   TableSnapshot,
 } from './types.js';
 
@@ -40,12 +45,33 @@ interface QueryDescription {
 }
 
 interface ExecutionContext {
-  table: string | null;
-  operation: QueryOperation;
-  whereColumns: string[];
   slowTables: Set<string>;
   slowQueryReason?: 'no_matching_index';
 }
+
+interface ResolvedBridgeConfig {
+  statePath: string;
+  commandsDir: string;
+  responsesDir: string;
+  pollMs: number;
+}
+
+type FsModule = typeof import('node:fs/promises');
+
+const DEFAULT_BRIDGE_ROOT = '.lintic/mock-pg';
+const DEFAULT_BRIDGE_CONFIG: ResolvedBridgeConfig = {
+  statePath: `${DEFAULT_BRIDGE_ROOT}/state.json`,
+  commandsDir: `${DEFAULT_BRIDGE_ROOT}/commands`,
+  responsesDir: `${DEFAULT_BRIDGE_ROOT}/responses`,
+  pollMs: 200,
+};
+
+const registeredPools = new Map<string, Pool>();
+let poolCounter = 1;
+let fsModulePromise: Promise<FsModule> | null = null;
+let bridgePoller: ReturnType<typeof setInterval> | null = null;
+let bridgeSyncInFlight = false;
+let activeBridgeConfig: ResolvedBridgeConfig | null = null;
 
 function normalizeName(value: string): string {
   return value.replace(/"/g, '').trim().toLowerCase();
@@ -99,6 +125,156 @@ function inferQueryDescription(sql: string): QueryDescription {
   }
 }
 
+function nextPoolId(): string {
+  const id = `pool-${poolCounter}`;
+  poolCounter += 1;
+  return id;
+}
+
+function resolveBridgeConfig(config: PoolConfig['bridge']): ResolvedBridgeConfig | null {
+  if (config === false) {
+    return null;
+  }
+
+  if (config === undefined || config === true) {
+    return { ...DEFAULT_BRIDGE_CONFIG };
+  }
+
+  return {
+    statePath: config.statePath ?? DEFAULT_BRIDGE_CONFIG.statePath,
+    commandsDir: config.commandsDir ?? DEFAULT_BRIDGE_CONFIG.commandsDir,
+    responsesDir: config.responsesDir ?? DEFAULT_BRIDGE_CONFIG.responsesDir,
+    pollMs: config.pollMs ?? DEFAULT_BRIDGE_CONFIG.pollMs,
+  };
+}
+
+async function getFsModule(): Promise<FsModule> {
+  if (!fsModulePromise) {
+    fsModulePromise = import('node:fs/promises');
+  }
+  return fsModulePromise;
+}
+
+async function ensureBridgeDirectories(fs: FsModule, config: ResolvedBridgeConfig): Promise<void> {
+  const path = await import('node:path');
+  await fs.mkdir(path.dirname(config.statePath), { recursive: true });
+  await fs.mkdir(config.commandsDir, { recursive: true });
+  await fs.mkdir(config.responsesDir, { recursive: true });
+}
+
+function getBridgePools(): Pool[] {
+  return Array.from(registeredPools.values()).filter((pool) => pool.bridgeConfig !== null);
+}
+
+function startBridgeIfNeeded(config: ResolvedBridgeConfig): void {
+  if (activeBridgeConfig === null) {
+    activeBridgeConfig = config;
+  }
+
+  if (bridgePoller !== null) {
+    return;
+  }
+
+  bridgePoller = setInterval(() => {
+    void syncBridgeStateAndCommands();
+  }, activeBridgeConfig.pollMs);
+  void syncBridgeStateAndCommands();
+}
+
+async function writeBridgeStateFile(fs: FsModule, config: ResolvedBridgeConfig): Promise<void> {
+  const state: BridgeStateFile = {
+    version: 1,
+    updatedAt: Date.now(),
+    pools: getBridgePools().map((pool) => pool.getInspectorState()),
+  };
+  await fs.writeFile(config.statePath, JSON.stringify(state, null, 2), 'utf-8');
+}
+
+async function processBridgeCommands(fs: FsModule, config: ResolvedBridgeConfig): Promise<void> {
+  const path = await import('node:path');
+  const commandFiles = await fs.readdir(config.commandsDir).catch(() => [] as string[]);
+
+  for (const fileName of commandFiles.filter((entry) => entry.endsWith('.json')).sort()) {
+    const commandPath = path.join(config.commandsDir, fileName);
+    const rawCommand = await fs.readFile(commandPath, 'utf-8').catch(() => null);
+    if (!rawCommand) {
+      continue;
+    }
+
+    let command: BridgeCommand;
+    try {
+      command = JSON.parse(rawCommand) as BridgeCommand;
+    } catch {
+      await fs.rm(commandPath, { force: true });
+      continue;
+    }
+
+    const targetPool = command.poolId
+      ? registeredPools.get(command.poolId)
+      : getBridgePools().at(0);
+
+    let response: BridgeResponse;
+    if (!targetPool) {
+      response = {
+        id: command.id,
+        poolId: command.poolId ?? '',
+        ok: false,
+        error: { message: 'No active lintic-mock-pg pool was found' },
+        createdAt: command.createdAt,
+        completedAt: Date.now(),
+      };
+    } else {
+      try {
+        const result = await targetPool.query(command.sql, command.params ?? []);
+        response = {
+          id: command.id,
+          poolId: targetPool.id,
+          ok: true,
+          result,
+          createdAt: command.createdAt,
+          completedAt: Date.now(),
+        };
+      } catch (error) {
+        response = {
+          id: command.id,
+          poolId: targetPool.id,
+          ok: false,
+          error: {
+            message: error instanceof Error ? error.message : String(error),
+            ...(error instanceof MockPgError ? { code: error.code } : {}),
+          },
+          createdAt: command.createdAt,
+          completedAt: Date.now(),
+        };
+      }
+    }
+
+    await fs.writeFile(
+      path.join(config.responsesDir, `${command.id}.json`),
+      JSON.stringify(response, null, 2),
+      'utf-8',
+    );
+    await fs.rm(commandPath, { force: true });
+  }
+}
+
+async function syncBridgeStateAndCommands(): Promise<void> {
+  if (bridgeSyncInFlight || activeBridgeConfig === null) {
+    return;
+  }
+
+  const config = activeBridgeConfig;
+  bridgeSyncInFlight = true;
+  try {
+    const fs = await getFsModule();
+    await ensureBridgeDirectories(fs, config);
+    await processBridgeCommands(fs, config);
+    await writeBridgeStateFile(fs, config);
+  } finally {
+    bridgeSyncInFlight = false;
+  }
+}
+
 class PoolClientImpl implements PoolClient {
   private released = false;
 
@@ -125,6 +301,10 @@ class PoolClientImpl implements PoolClient {
 }
 
 export class Pool {
+  readonly id: string;
+  readonly name: string;
+  readonly bridgeConfig: ResolvedBridgeConfig | null;
+
   private readonly db: IMemoryDb;
   private readonly RawClient: RawClientConstructor;
   private readonly listeners = new Set<PoolEventListener>();
@@ -142,6 +322,9 @@ export class Pool {
   private nextClientId = 1;
 
   constructor(config: PoolConfig = {}) {
+    this.id = nextPoolId();
+    this.name = config.name ?? this.id;
+    this.bridgeConfig = resolveBridgeConfig(config.bridge);
     this.db = newDb();
     const adapter = this.db.adapters.createPg();
     this.RawClient = adapter.Client as RawClientConstructor;
@@ -149,6 +332,13 @@ export class Pool {
     this.maxRecentQueries = config.maxRecentQueries ?? 100;
     this.slowQueryThresholdMs = config.slowQueryThresholdMs;
     this.onSlowQuery = config.onSlowQuery;
+
+    registeredPools.set(this.id, this);
+    if (this.bridgeConfig) {
+      startBridgeIfNeeded(this.bridgeConfig);
+      void syncBridgeStateAndCommands();
+    }
+
     this.subscriptions.push(
       this.db.on('seq-scan', (table) => {
         const execution = this.activeExecutions.at(-1);
@@ -224,6 +414,16 @@ export class Pool {
       stats: this.getStats(),
       timestamp: Date.now(),
     });
+    if (this.bridgeConfig) {
+      registeredPools.delete(this.id);
+      if (getBridgePools().length === 0 && bridgePoller !== null) {
+        clearInterval(bridgePoller);
+        bridgePoller = null;
+        activeBridgeConfig = null;
+      } else {
+        void syncBridgeStateAndCommands();
+      }
+    }
   }
 
   getSnapshot(): PoolSnapshot {
@@ -236,6 +436,24 @@ export class Pool {
 
   getRecentQueries(): QueryLogEntry[] {
     return this.recentQueries.map((query) => ({ ...query, params: [...query.params] }));
+  }
+
+  getTableRows(tableName: string): QueryRow[] {
+    const table = this.db.getTable(tableName, true);
+    if (!table) {
+      throw new MockPgError(`Table does not exist: ${tableName}`, 'UNDEFINED_TABLE');
+    }
+    return table.find().map((row) => ({ ...row } as QueryRow));
+  }
+
+  getInspectorState(): InspectablePoolState {
+    return {
+      id: this.id,
+      name: this.name,
+      snapshot: this.getSnapshot(),
+      tables: this.getTableDataSnapshots(),
+      recentQueries: this.getRecentQueries(),
+    };
   }
 
   subscribe(listener: PoolEventListener): () => void {
@@ -259,22 +477,10 @@ export class Pool {
     });
   }
 
-  async execute<R extends QueryRow = QueryRow>(sql: string, params: PrimitiveValue[] = []): Promise<QueryResult<R>> {
-    const client = await this.connect();
-    try {
-      return await client.query<R>(sql, params);
-    } finally {
-      client.release();
-    }
-  }
-
   async executeWithClient<R extends QueryRow = QueryRow>(rawClient: RawClient, sql: string, params: PrimitiveValue[] = []): Promise<QueryResult<R>> {
     this.assertUsable();
     const description = inferQueryDescription(sql);
     const execution: ExecutionContext = {
-      table: description.table,
-      operation: description.operation,
-      whereColumns: description.whereColumns,
       slowTables: new Set<string>(),
     };
     this.activeExecutions.push(execution);
@@ -322,23 +528,23 @@ export class Pool {
       (description.operation === 'select' || description.operation === 'update' || description.operation === 'delete')
     ) {
       const slowTable = description.table ?? execution.slowTables.values().next().value ?? null;
-      if (slowTable === null) {
-        return {
-          rows: rawResult.rows ?? [],
-          rowCount,
+      if (slowTable !== null) {
+        const slowQuery: SlowQueryRecord = {
+          sql,
+          params: [...params],
+          operation: description.operation,
+          table: slowTable,
+          whereColumns: [...description.whereColumns],
+          reason: execution.slowQueryReason,
+          timestamp,
         };
+        this.onSlowQuery?.(slowQuery);
+        void this.slowQueryThresholdMs;
       }
-      const slowQuery: SlowQueryRecord = {
-        sql,
-        params: [...params],
-        operation: description.operation,
-        table: slowTable,
-        whereColumns: [...description.whereColumns],
-        reason: execution.slowQueryReason,
-        timestamp,
-      };
-      this.onSlowQuery?.(slowQuery);
-      void this.slowQueryThresholdMs;
+    }
+
+    if (this.bridgeConfig) {
+      void syncBridgeStateAndCommands();
     }
 
     return {
@@ -363,13 +569,21 @@ export class Pool {
   }
 
   private getTableSnapshots(): TableSnapshot[] {
+    return this.getTableDataSnapshots().map((table) => ({
+      name: table.name,
+      columns: table.columns,
+      rowCount: table.rowCount,
+    }));
+  }
+
+  private getTableDataSnapshots(): TableDataSnapshot[] {
     const tables = this.db.public.many(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
     ) as Array<{ table_name: string }>;
 
     return tables.map(({ table_name }) => {
       const table = this.db.getTable(table_name);
-      const rows = table.find();
+      const rows = table.find().map((row) => ({ ...row } as QueryRow));
       const columns = Array.from(table.getColumns()).map((column) => ({
         name: column.name,
         type: String((column.type as { primary?: string }).primary ?? column.type).toUpperCase(),
@@ -380,6 +594,7 @@ export class Pool {
         name: table_name,
         columns,
         rowCount: rows.length,
+        rows,
       };
     });
   }
@@ -391,11 +606,11 @@ export class Pool {
         return table.listIndices().map((index) => {
           const kind: IndexSnapshot['kind'] = table.primaryIndex?.name === index.name ? 'primary' : 'index';
           return {
-          name: index.name,
-          table: tableName,
-          columns: index.expressions.map(normalizeName),
-          kind,
-        };
+            name: index.name,
+            table: tableName,
+            columns: index.expressions.map(normalizeName),
+            kind,
+          };
         });
       })
       .sort((left, right) => left.name.localeCompare(right.name));
@@ -446,9 +661,14 @@ export class Pool {
 }
 
 export type {
+  BridgeCommand,
+  BridgeConfig,
+  BridgeResponse,
+  BridgeStateFile,
   ColumnSnapshot,
   IndexKind,
   IndexSnapshot,
+  InspectablePoolState,
   PoolClient,
   PoolConfig,
   PoolEvent,
@@ -462,6 +682,7 @@ export type {
   QueryRow,
   SlowQueryReason,
   SlowQueryRecord,
+  TableDataSnapshot,
   TableSnapshot,
 } from './types.js';
 

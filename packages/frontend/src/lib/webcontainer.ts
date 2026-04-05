@@ -2,6 +2,42 @@ import { WebContainer } from '@webcontainer/api';
 
 let instance: WebContainer | null = null;
 let bootPromise: Promise<WebContainer> | null = null;
+let mockPgBundlePromise: Promise<string> | null = null;
+
+const MOCK_PG_DIR = 'node_modules/lintic-mock-pg';
+const MOCK_PG_MANIFEST = JSON.stringify({
+  name: 'lintic-mock-pg',
+  version: '0.0.1',
+  type: 'module',
+  main: './index.js',
+  exports: {
+    '.': './index.js',
+  },
+}, null, 2);
+
+async function fetchMockPgBundle(): Promise<string> {
+  if (!mockPgBundlePromise) {
+    mockPgBundlePromise = fetch('/lintic-mock-pg.js', { cache: 'no-store' }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Failed to fetch lintic-mock-pg bundle (HTTP ${response.status})`);
+      }
+      return response.text();
+    });
+  }
+  return mockPgBundlePromise;
+}
+
+async function ensureMockPgPackage(wc: WebContainer): Promise<void> {
+  const bundle = await fetchMockPgBundle();
+  await wc.fs.mkdir(MOCK_PG_DIR, { recursive: true });
+  await wc.fs.writeFile(`${MOCK_PG_DIR}/package.json`, MOCK_PG_MANIFEST);
+  await wc.fs.writeFile(`${MOCK_PG_DIR}/index.js`, bundle);
+}
+
+export async function ensureMockPgPackageInstalled(): Promise<void> {
+  const wc = await getWebContainer();
+  await ensureMockPgPackage(wc);
+}
 
 export async function getWebContainer(): Promise<WebContainer> {
   if (instance) return instance;
@@ -10,6 +46,7 @@ export async function getWebContainer(): Promise<WebContainer> {
   bootPromise = (async () => {
     try {
       const wc = await WebContainer.boot();
+      await ensureMockPgPackage(wc);
       instance = wc;
       return wc;
     } catch (err) {
@@ -23,6 +60,11 @@ export async function getWebContainer(): Promise<WebContainer> {
 
 export async function writeFile(path: string, content: string): Promise<void> {
   const wc = await getWebContainer();
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length > 1) {
+    const parentDir = `${path.startsWith('/') ? '/' : ''}${segments.slice(0, -1).join('/')}`;
+    await wc.fs.mkdir(parentDir, { recursive: true });
+  }
   await wc.fs.writeFile(path, content);
 }
 
@@ -68,4 +110,5 @@ export async function watchFiles(
 export function resetForTests(): void {
   instance = null;
   bootPromise = null;
+  mockPgBundlePromise = null;
 }

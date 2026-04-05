@@ -1,6 +1,28 @@
-import { describe, expect, test, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { Pool, MockPgError } from './index.js';
 import { parseSql } from './parser.js';
+
+function createPool(overrides: ConstructorParameters<typeof Pool>[0] = {}) {
+  return new Pool({
+    bridge: false,
+    ...overrides,
+  });
+}
+
+async function waitFor<T>(fn: () => Promise<T>, timeoutMs = 2_000): Promise<T> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      return await fn();
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  return fn();
+}
 
 describe('parseSql', () => {
   test('parses CREATE TABLE columns including primary key metadata', () => {
@@ -38,8 +60,12 @@ describe('parseSql', () => {
 });
 
 describe('Pool', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
   test('creates tables, inserts rows, and selects with filtering, ordering, and limits', async () => {
-    const pool = new Pool();
+    const pool = createPool();
 
     await pool.query('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, age INTEGER)');
     await pool.query(
@@ -56,7 +82,7 @@ describe('Pool', () => {
   });
 
   test('updates and deletes matching rows', async () => {
-    const pool = new Pool();
+    const pool = createPool();
 
     await pool.query('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, age INTEGER)');
     await pool.query("INSERT INTO users (id, email, age) VALUES (1, 'alice@example.com', 30), (2, 'bob@example.com', 40)");
@@ -74,7 +100,7 @@ describe('Pool', () => {
 
   test('records indexed queries without slow-query flags and records non-indexed queries as slow', async () => {
     const onSlowQuery = vi.fn();
-    const pool = new Pool({ onSlowQuery });
+    const pool = createPool({ onSlowQuery });
 
     await pool.query('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, age INTEGER)');
     await pool.query('CREATE INDEX users_email_idx ON users (email)');
@@ -98,7 +124,7 @@ describe('Pool', () => {
   });
 
   test('supports joins through the underlying pg-mem engine', async () => {
-    const pool = new Pool();
+    const pool = createPool();
 
     await pool.query('CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)');
     await pool.query('CREATE TABLE books (id INTEGER PRIMARY KEY, author_id INTEGER, title TEXT)');
@@ -121,8 +147,32 @@ describe('Pool', () => {
     ]);
   });
 
+  test('returns table rows for inspector use', async () => {
+    const pool = createPool();
+
+    await pool.query('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+    await pool.query("INSERT INTO users (id, email) VALUES (1, 'alice@example.com'), (2, 'bob@example.com')");
+
+    expect(pool.getTableRows('users')).toEqual([
+      { id: 1, email: 'alice@example.com' },
+      { id: 2, email: 'bob@example.com' },
+    ]);
+  });
+
+  test('caps recent query history', async () => {
+    const pool = createPool({ maxRecentQueries: 2 });
+
+    await pool.query('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+    await pool.query("INSERT INTO users (id, email) VALUES (1, 'alice@example.com')");
+    await pool.query('SELECT * FROM users');
+
+    expect(pool.getRecentQueries()).toHaveLength(2);
+    expect(pool.getRecentQueries()[0]?.operation).toBe('insert');
+    expect(pool.getRecentQueries()[1]?.operation).toBe('select');
+  });
+
   test('enforces pool limits for connect and allows reuse after release', async () => {
-    const pool = new Pool({ max: 1 });
+    const pool = createPool({ max: 1 });
     const client = await pool.connect();
 
     await expect(pool.connect()).rejects.toThrow(/pool exhausted/i);
@@ -135,14 +185,21 @@ describe('Pool', () => {
     expect(pool.getSnapshot().stats.idle).toBe(1);
   });
 
+  test('prevents client queries after release', async () => {
+    const pool = createPool();
+    const client = await pool.connect();
+    client.release();
+    await expect(client.query('SELECT 1')).rejects.toThrow(/released/i);
+  });
+
   test('prevents queries after pool end', async () => {
-    const pool = new Pool();
+    const pool = createPool();
     await pool.end();
     await expect(pool.query('SELECT * FROM users')).rejects.toBeInstanceOf(MockPgError);
   });
 
   test('exposes serializable snapshots and emits pool, schema, and query events', async () => {
-    const pool = new Pool({ max: 2 });
+    const pool = createPool({ max: 2 });
     const events: string[] = [];
     const unsubscribe = pool.subscribe((event) => {
       if (event.type === 'pool') {
@@ -190,5 +247,72 @@ describe('Pool', () => {
     expect(events).toContain('query:create_index');
     expect(events).toContain('pool:client_acquired');
     expect(events).toContain('pool:client_released');
+  });
+
+  test('writes bridge state and executes bridge commands through the filesystem', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lintic-mock-pg-'));
+    const statePath = join(root, 'state.json');
+    const commandsDir = join(root, 'commands');
+    const responsesDir = join(root, 'responses');
+    const pool = new Pool({
+      name: 'primary-db',
+      bridge: {
+        statePath,
+        commandsDir,
+        responsesDir,
+        pollMs: 25,
+      },
+    });
+
+    try {
+      await pool.query('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+      await pool.query("INSERT INTO users (id, email) VALUES (1, 'alice@example.com')");
+
+      const state = await waitFor(async () => {
+        const raw = await readFile(statePath, 'utf-8');
+        return JSON.parse(raw) as {
+          pools: Array<{
+            id: string;
+            name: string;
+            tables: Array<{ name: string; rows: Array<{ id: number; email: string }> }>;
+          }>;
+        };
+      });
+
+      expect(state.pools[0]?.name).toBe('primary-db');
+      expect(state.pools[0]?.tables[0]).toMatchObject({
+        name: 'users',
+        rows: [{ id: 1, email: 'alice@example.com' }],
+      });
+
+      await writeFile(
+        join(commandsDir, 'cmd-1.json'),
+        JSON.stringify({
+          id: 'cmd-1',
+          poolId: state.pools[0]!.id,
+          sql: 'SELECT * FROM users WHERE id = $1',
+          params: [1],
+          createdAt: Date.now(),
+        }),
+        'utf-8',
+      );
+
+      const response = await waitFor(async () => {
+        const raw = await readFile(join(responsesDir, 'cmd-1.json'), 'utf-8');
+        return JSON.parse(raw) as {
+          ok: boolean;
+          result: { rows: Array<{ id: number; email: string }>; rowCount: number };
+        };
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.result).toEqual({
+        rows: [{ id: 1, email: 'alice@example.com' }],
+        rowCount: 1,
+      });
+    } finally {
+      await pool.end();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

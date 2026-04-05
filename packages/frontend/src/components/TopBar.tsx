@@ -49,8 +49,7 @@ export function TopBar({
           <span className="text-white font-bold text-xl tracking-tight">Lintic</span>
         </div>
 
-        {/* Grouped Wrapper - Pill style with 25px radius */}
-        <div className="flex items-center rounded-[25px] bg-[#111111] border border-white/5 shadow-2xl pl-10 pr-2 py-2">
+        <div className="flex items-center rounded-[var(--assessment-radius-shell)] bg-[#111111] border border-white/5 shadow-2xl pl-8 pr-2 py-2">
           <div className="flex items-center gap-12 mr-10">
             <div className="flex items-center gap-4">
               <span className="text-[13px] text-[#555555] font-medium">Task:</span>
@@ -68,7 +67,7 @@ export function TopBar({
               data-1p-ignore
               data-testid="view-prompt"
               onClick={onViewPrompt}
-              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#1A1A1A] text-[#3887ce] text-[13px] font-bold tracking-tight hover:brightness-125 transition-all border border-white/5 shadow-lg"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-[var(--assessment-radius-control)] bg-[#1A1A1A] text-[#3887ce] text-[13px] font-bold tracking-tight hover:brightness-125 transition-all border border-white/5 shadow-lg"
             >
               View full prompt
             </button>
@@ -79,7 +78,7 @@ export function TopBar({
               type="button"
               data-testid="open-review-debug"
               onClick={onOpenReviewDebug}
-              className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-[#1A1A1A] text-[#90b8d8] text-[13px] font-bold tracking-tight hover:brightness-125 transition-all border border-white/5 shadow-lg"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-[var(--assessment-radius-control)] bg-[#1A1A1A] text-[#90b8d8] text-[13px] font-bold tracking-tight hover:brightness-125 transition-all border border-white/5 shadow-lg"
             >
               Open review
             </button>
@@ -100,7 +99,7 @@ export function TopBar({
           data-testid="submit-task"
           onClick={onSubmitTask}
           disabled={submitDisabled || !onSubmitTask}
-          className="flex items-center gap-2 px-8 py-3 rounded-2xl bg-[#064E3B] text-[#10B981] text-[13px] font-bold tracking-tight hover:brightness-110 transition-all border border-[#10B981]/10 shadow-lg"
+          className="flex items-center gap-2 px-7 py-2.5 rounded-[var(--assessment-radius-control)] bg-[#064E3B] text-[#10B981] text-[13px] font-bold tracking-tight hover:brightness-110 transition-all border border-[#10B981]/10 shadow-lg"
           style={{
             opacity: submitDisabled || !onSubmitTask ? 0.5 : 1,
             cursor: submitDisabled || !onSubmitTask ? 'not-allowed' : 'pointer',

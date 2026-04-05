@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar.js';
+import type { WorkspaceSection } from './components/Sidebar.js';
 import { TopBar } from './components/TopBar.js';
 import { SplitPane } from './components/SplitPane.js';
 import { IdePanel } from './components/IdePanel.js';
+import { DatabasePanel } from './components/DatabasePanel.js';
 import { ChatPanel } from './components/ChatPanel.js';
 import type { AgentConfig, AgentMode } from './components/ChatPanel.js';
 import { DevSetup } from './components/DevSetup.js';
@@ -68,6 +70,7 @@ export function App() {
   const [activePrompt, setActivePrompt] = useState<PromptSummary | null>(null);
   const [fileToOpen, setFileToOpen] = useState<string | null>(null);
   const [latestPlanPath, setLatestPlanPath] = useState<string | null>(null);
+  const [activeWorkspaceSection, setActiveWorkspaceSection] = useState<WorkspaceSection>('code');
   const wcRef = useRef<WebContainer | null>(null);
   const executorRef = useRef<ToolExecutor | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
@@ -173,6 +176,7 @@ export function App() {
     setAgentMode('build');
     setActivePrompt(session.prompt);
     setLatestPlanPath(null);
+    setActiveWorkspaceSection('code');
     setSubmittedStats(null);
     setSubmitConfirmationOpen(false);
     setAppState('active');
@@ -224,6 +228,11 @@ export function App() {
 
   const handlePlanGenerated = useCallback((path: string) => {
     setLatestPlanPath(path);
+    setFileToOpen(`${path}-${Date.now()}`);
+  }, []);
+
+  const handleOpenWorkspaceFile = useCallback((path: string) => {
+    setActiveWorkspaceSection('code');
     setFileToOpen(`${path}-${Date.now()}`);
   }, []);
 
@@ -398,11 +407,28 @@ export function App() {
       />
 
       <div className="flex-1 flex min-h-0 gap-[5px]">
-        <Sidebar />
+        <Sidebar activeSection={activeWorkspaceSection} onSelect={setActiveWorkspaceSection} />
         
         <div className="flex-1 min-h-0">
           <SplitPane
-            left={<IdePanel terminalRef={terminalRef} requestOpenFile={fileToOpen} />}
+            left={
+              <div className="h-full">
+                <div className={activeWorkspaceSection === 'code' ? 'h-full' : 'hidden'}>
+                  <IdePanel terminalRef={terminalRef} requestOpenFile={fileToOpen} />
+                </div>
+                <div className={activeWorkspaceSection === 'database' ? 'h-full' : 'hidden'}>
+                  <DatabasePanel onOpenSetupFile={handleOpenWorkspaceFile} />
+                </div>
+                <div
+                  className={activeWorkspaceSection === 'git' ? 'h-full' : 'hidden'}
+                  style={{ background: 'var(--color-bg-code)', color: 'var(--color-text-dim)' }}
+                >
+                  <div className="flex h-full items-center justify-center px-6 text-sm">
+                    Git tools are not available yet.
+                  </div>
+                </div>
+              </div>
+            }
             right={
               <ChatPanel
                 sessionId={sessionId}
