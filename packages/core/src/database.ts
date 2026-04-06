@@ -336,7 +336,8 @@ const SQLITE_SCHEMA = `
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     token_count INTEGER NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    rewound_at INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS replay_events (
@@ -469,7 +470,8 @@ const POSTGRES_SCHEMA_STATEMENTS = [
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     token_count INTEGER NOT NULL,
-    created_at BIGINT NOT NULL
+    created_at BIGINT NOT NULL,
+    rewound_at BIGINT
   )`,
   `CREATE TABLE IF NOT EXISTS replay_events (
     id BIGSERIAL PRIMARY KEY,
