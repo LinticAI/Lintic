@@ -602,7 +602,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
     return Promise.resolve((row.max_turn_sequence ?? 0) + 1);
   }
 
-  async addBranchMessage(
+  addBranchMessage(
     sessionId: string,
     branchId: string,
     turnSequence: number | null,
@@ -614,6 +614,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
       INSERT INTO messages (session_id, branch_id, turn_sequence, role, content, token_count, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(sessionId, branchId, turnSequence, role, content, tokenCount, Date.now());
+    return Promise.resolve();
   }
 
   addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void> {
@@ -726,7 +727,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
     return Promise.resolve();
   }
 
-  async addBranchReplayEvent(
+  addBranchReplayEvent(
     sessionId: string,
     branchId: string,
     turnSequence: number | null,
@@ -737,6 +738,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
     this.db.prepare(
       'INSERT INTO replay_events (session_id, branch_id, turn_sequence, type, timestamp, payload) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(sessionId, branchId, turnSequence, type, timestamp, JSON.stringify(payload));
+    return Promise.resolve();
   }
 
   addReplayEvent(sessionId: string, type: ReplayEventType, timestamp: number, payload: unknown): Promise<void> {
