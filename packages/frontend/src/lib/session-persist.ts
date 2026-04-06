@@ -196,10 +196,14 @@ export async function restoreFiles(
   sessionToken: string,
   branchId?: string,
   apiBase = '',
+  turnSequence?: number,
 ): Promise<RestoredWorkspaceState | null> {
   try {
-    const branchQuery = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : '';
-    const workspaceRes = await fetch(`${apiBase}/api/sessions/${sessionId}/workspace${branchQuery}`, {
+    const params = new URLSearchParams();
+    if (branchId) params.set('branch_id', branchId);
+    if (turnSequence !== undefined) params.set('turn_sequence', String(turnSequence));
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+    const workspaceRes = await fetch(`${apiBase}/api/sessions/${sessionId}/workspace${query}`, {
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
     if (workspaceRes.ok) {
@@ -223,7 +227,7 @@ export async function restoreFiles(
       }
     }
 
-    const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages${branchQuery}`, {
+    const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages${query}`, {
       headers: { Authorization: `Bearer ${sessionToken}` },
     });
     if (!res.ok) return null;

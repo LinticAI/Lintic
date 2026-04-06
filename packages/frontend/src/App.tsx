@@ -378,6 +378,24 @@ export function App() {
     });
   }, [activeBranchId, sessionId, sessionToken, snapshotWorkspace]);
 
+  const handleRewind = useCallback(async (turnSequence: number, mode: 'code' | 'both') => {
+    if (!sessionId || !sessionToken || !activeBranchId) return;
+
+    if (mode === 'both') {
+      await fetch(`/api/sessions/${sessionId}/rewind`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sessionToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ branch_id: activeBranchId, turn_sequence: turnSequence }),
+      });
+    }
+
+    const restored = await restoreFiles(sessionId, sessionToken, activeBranchId, '', turnSequence);
+    applyRestoredWorkspaceState(restored);
+  }, [activeBranchId, applyRestoredWorkspaceState, sessionId, sessionToken]);
+
   const handleCreateBranch = useCallback(async (name: string, turnSequence: number, conversationId?: string) => {
     if (!sessionId || !sessionToken || !activeBranchId) {
       return;
@@ -695,6 +713,7 @@ export function App() {
                 onBranchChange={handleBranchChange}
                 onSaveCheckpoint={handleSaveCheckpoint}
                 onCreateBranch={handleCreateBranch}
+                onRewind={handleRewind}
                 activeFilePath={activeFilePath}
                 onTurnComplete={(turnSequence) => {
                   void snapshotWorkspace('turn', { turnSequence });
