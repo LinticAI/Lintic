@@ -745,7 +745,10 @@ export class SQLiteAdapter implements DatabaseAdapter {
 
   getMainConversation(sessionId: string, branchId: string): Promise<ConversationSummary | null> {
     const row = this.db.prepare(
-      "SELECT * FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' ORDER BY created_at ASC LIMIT 1",
+      `SELECT * FROM conversations
+       WHERE session_id = ? AND branch_id = ?
+       ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+       LIMIT 1`,
     ).get(sessionId, branchId) as ConversationRow | undefined;
     return Promise.resolve(row ? rowToConversation(row) : null);
   }
@@ -828,7 +831,10 @@ export class SQLiteAdapter implements DatabaseAdapter {
           'SELECT * FROM conversations WHERE session_id = ? AND id = ? LIMIT 1',
         ).get(config.session_id, config.conversation_id) as ConversationRow | undefined
       : this.db.prepare(
-          "SELECT * FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1",
+          `SELECT * FROM conversations
+           WHERE session_id = ? AND branch_id = ?
+           ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+           LIMIT 1`,
         ).get(config.session_id, config.parent_branch_id) as ConversationRow | undefined;
 
     this.db.prepare(
@@ -953,7 +959,10 @@ export class SQLiteAdapter implements DatabaseAdapter {
   ): Promise<void> {
     const resolvedConversationId = conversationId ?? (
       this.db.prepare(
-        "SELECT id FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1",
+        `SELECT id FROM conversations
+         WHERE session_id = ? AND branch_id = ?
+         ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+         LIMIT 1`,
       ).get(sessionId, branchId) as { id: string } | undefined
     )?.id;
     if (!resolvedConversationId) {
@@ -1116,7 +1125,10 @@ export class SQLiteAdapter implements DatabaseAdapter {
   ): Promise<void> {
     const resolvedConversationId = conversationId ?? (
       this.db.prepare(
-        "SELECT id FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1",
+        `SELECT id FROM conversations
+         WHERE session_id = ? AND branch_id = ?
+         ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+         LIMIT 1`,
       ).get(sessionId, branchId) as { id: string } | undefined
     )?.id;
     if (!resolvedConversationId) {
@@ -1546,7 +1558,10 @@ export class PostgresAdapter implements DatabaseAdapter {
   async getMainConversation(sessionId: string, branchId: string): Promise<ConversationSummary | null> {
     await this.initialize();
     const result = await this.pool.query<ConversationRow>(
-      "SELECT * FROM conversations WHERE session_id = $1 AND branch_id = $2 AND title = 'main' ORDER BY created_at ASC LIMIT 1",
+      `SELECT * FROM conversations
+       WHERE session_id = $1 AND branch_id = $2
+       ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+       LIMIT 1`,
       [sessionId, branchId],
     );
     return result.rows[0] ? rowToConversation(normalizeConversationRow(result.rows[0])) : null;

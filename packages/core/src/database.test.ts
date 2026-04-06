@@ -161,6 +161,32 @@ describe('addMessage / getMessages', () => {
     expect(msgs[0]!.created_at).toBeGreaterThanOrEqual(before);
     expect(msgs[0]!.created_at).toBeLessThanOrEqual(after);
   });
+
+  test('addReplayEvent falls back to the oldest branch conversation when main is renamed', async () => {
+    const branch = await db.getMainBranch(sessionId);
+    expect(branch).not.toBeNull();
+
+    const mainConversation = await db.getMainConversation(sessionId, branch!.id);
+    expect(mainConversation).not.toBeNull();
+
+    await db.updateConversation({
+      session_id: sessionId,
+      conversation_id: mainConversation!.id,
+      title: 'Renamed chat',
+    });
+
+    await expect(
+      db.addReplayEvent(sessionId, 'agent_response', Date.now(), {
+        content: null,
+        stop_reason: 'error',
+        error: 'boom',
+      }),
+    ).resolves.toBeUndefined();
+
+    const events = await db.getReplayEvents(sessionId);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.conversation_id).toBe(mainConversation!.id);
+  });
 });
 
 describe('closeSession', () => {

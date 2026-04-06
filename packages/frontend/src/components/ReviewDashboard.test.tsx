@@ -108,4 +108,58 @@ describe('ReviewDashboard', () => {
     expect(screen.getByTestId('timeline-event-0')).toBeInTheDocument();
     expect(screen.getByTestId('code-state-content').textContent).toContain('const app = true;');
   });
+
+  test('renders rewound blocks inline and expands hidden messages', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ...reviewPayload,
+        raw_messages: [
+          {
+            id: 1,
+            turn_sequence: 1,
+            role: 'user',
+            content: 'Please build it',
+            created_at: 1,
+            rewound_at: null,
+          },
+          {
+            id: 2,
+            turn_sequence: 1,
+            role: 'assistant',
+            content: 'Implemented',
+            created_at: 3,
+            rewound_at: null,
+          },
+          {
+            id: 3,
+            turn_sequence: 2,
+            role: 'user',
+            content: 'Actually, switch to Fastify instead.',
+            created_at: 4,
+            rewound_at: 10,
+          },
+          {
+            id: 4,
+            turn_sequence: 2,
+            role: 'assistant',
+            content: 'Reworking the server setup for Fastify.',
+            created_at: 5,
+            rewound_at: 10,
+          },
+        ],
+      }),
+    } as Response));
+
+    render(<ReviewDashboard sessionId="sess-1" isDark={false} onToggleTheme={() => undefined} />);
+
+    await waitFor(() => expect(screen.getByText('Rewound here')).toBeInTheDocument());
+    expect(screen.getByText('2 messages hidden')).toBeInTheDocument();
+    expect(screen.queryByText('Actually, switch to Fastify instead.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Rewound here'));
+
+    expect(screen.getByText('Actually, switch to Fastify instead.')).toBeInTheDocument();
+    expect(screen.getByText('Reworking the server setup for Fastify.')).toBeInTheDocument();
+  });
 });

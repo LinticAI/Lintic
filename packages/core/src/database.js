@@ -380,7 +380,10 @@ export class SQLiteAdapter {
         return Promise.resolve(rows.map(rowToSessionBranch));
     }
     getMainConversation(sessionId, branchId) {
-        const row = this.db.prepare("SELECT * FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' ORDER BY created_at ASC LIMIT 1").get(sessionId, branchId);
+        const row = this.db.prepare(`SELECT * FROM conversations
+       WHERE session_id = ? AND branch_id = ?
+       ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+       LIMIT 1`).get(sessionId, branchId);
         return Promise.resolve(row ? rowToConversation(row) : null);
     }
     getConversation(sessionId, conversationId) {
@@ -433,7 +436,10 @@ export class SQLiteAdapter {
         const createdAt = Date.now();
         const parentConversation = config.conversation_id
             ? this.db.prepare('SELECT * FROM conversations WHERE session_id = ? AND id = ? LIMIT 1').get(config.session_id, config.conversation_id)
-            : this.db.prepare("SELECT * FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1").get(config.session_id, config.parent_branch_id);
+            : this.db.prepare(`SELECT * FROM conversations
+           WHERE session_id = ? AND branch_id = ?
+           ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+           LIMIT 1`).get(config.session_id, config.parent_branch_id);
         this.db.prepare(`INSERT INTO session_branches (
         id, session_id, name, parent_branch_id, forked_from_sequence, created_at
       ) VALUES (?, ?, ?, ?, ?, ?)`).run(id, config.session_id, config.name, config.parent_branch_id, config.forked_from_sequence, createdAt);
@@ -488,7 +494,10 @@ export class SQLiteAdapter {
         return Promise.resolve((row.max_turn_sequence ?? 0) + 1);
     }
     addBranchMessage(sessionId, branchId, turnSequence, role, content, tokenCount, conversationId) {
-        const resolvedConversationId = conversationId ?? this.db.prepare("SELECT id FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1").get(sessionId, branchId)?.id;
+        const resolvedConversationId = conversationId ?? this.db.prepare(`SELECT id FROM conversations
+         WHERE session_id = ? AND branch_id = ?
+         ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+         LIMIT 1`).get(sessionId, branchId)?.id;
         if (!resolvedConversationId) {
             throw new Error(`Main conversation not found for branch ${branchId}`);
         }
@@ -599,7 +608,10 @@ export class SQLiteAdapter {
         return Promise.resolve();
     }
     addBranchReplayEvent(sessionId, branchId, turnSequence, type, timestamp, payload, conversationId) {
-        const resolvedConversationId = conversationId ?? this.db.prepare("SELECT id FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1").get(sessionId, branchId)?.id;
+        const resolvedConversationId = conversationId ?? this.db.prepare(`SELECT id FROM conversations
+         WHERE session_id = ? AND branch_id = ?
+         ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+         LIMIT 1`).get(sessionId, branchId)?.id;
         if (!resolvedConversationId) {
             throw new Error(`Main conversation not found for branch ${branchId}`);
         }
@@ -869,7 +881,10 @@ export class PostgresAdapter {
     }
     async getMainConversation(sessionId, branchId) {
         await this.initialize();
-        const result = await this.pool.query("SELECT * FROM conversations WHERE session_id = $1 AND branch_id = $2 AND title = 'main' ORDER BY created_at ASC LIMIT 1", [sessionId, branchId]);
+        const result = await this.pool.query(`SELECT * FROM conversations
+       WHERE session_id = $1 AND branch_id = $2
+       ORDER BY CASE WHEN title = 'main' THEN 0 ELSE 1 END, created_at ASC
+       LIMIT 1`, [sessionId, branchId]);
         return result.rows[0] ? rowToConversation(normalizeConversationRow(result.rows[0])) : null;
     }
     async getConversation(sessionId, conversationId) {

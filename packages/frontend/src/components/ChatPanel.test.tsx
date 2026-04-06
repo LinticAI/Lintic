@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import type { ComponentProps } from 'react';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChatPanel } from './ChatPanel.js';
 import type { LocalToolCall, LocalToolResult } from './ToolActionCard.js';
@@ -137,6 +138,25 @@ describe('ChatPanel', () => {
 
     await waitFor(() => expect(screen.getByText('Hello agent')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('Hello from agent')).toBeInTheDocument());
+  });
+
+  test('shows rewind affordance for a freshly sent message once turn_sequence arrives', async () => {
+    const onRewind = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(historyResponse)
+      .mockResolvedValueOnce(makeSSEResponse([{
+        event: 'done',
+        data: { ...sseAgentDone('Hello from agent'), turn_sequence: 1 },
+      }]));
+
+    render(<ChatPanel sessionId="s1" constraints={defaultConstraints} onRewind={onRewind} />);
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'Hello agent' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => expect(screen.getByText('Hello from agent')).toBeInTheDocument());
+    expect(screen.getByTestId('rewind-button')).toBeInTheDocument();
   });
 
   test('keeps optimistic user messages when history finishes loading later', async () => {
@@ -926,7 +946,7 @@ describe('ChatPanel', () => {
     } as unknown as Response;
 
     /** Helper: render ChatPanel with a history-loaded user message that has turnSequence: 1. */
-    async function renderWithHistoryMessage(onRewind?: ReturnType<typeof vi.fn>) {
+    async function renderWithHistoryMessage(onRewind?: ComponentProps<typeof ChatPanel>['onRewind']) {
       // All fetches return the history-with-user-msg response (handles multiple history loads).
       vi.mocked(fetch).mockResolvedValue(historyWithUserMsg);
 

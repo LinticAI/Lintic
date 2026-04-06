@@ -213,6 +213,24 @@ function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMe
   return merged;
 }
 
+function assignTurnSequenceToLatestUserMessage(
+  messages: ChatMessage[],
+  turnSequence: number,
+): ChatMessage[] {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role !== 'user' || typeof message.turnSequence === 'number') {
+      continue;
+    }
+
+    const next = [...messages];
+    next[i] = { ...message, turnSequence };
+    return next;
+  }
+
+  return messages;
+}
+
 /** Helper to parse JSON tool use from assistant content */
 function parseToolUse(content: string): { content: string | null; tool_actions: LocalToolAction[] } {
   const tool_actions: LocalToolAction[] = [];
@@ -838,6 +856,9 @@ export function ChatPanel({
       for await (const { event, data } of readSSEStream(res.body)) {
         if (event === 'tool_calls') {
           const { request_id, description, tool_calls, turn_sequence } = data as SSEToolCallsPayload;
+          if (typeof turn_sequence === 'number') {
+            setMessages((prev) => assignTurnSequenceToLatestUserMessage(prev, turn_sequence));
+          }
           const msgId = generateId();
           setMessages((prev) => [
             ...prev,
@@ -894,6 +915,9 @@ export function ChatPanel({
 
         } else if (event === 'done') {
           const result = data as SSEDonePayload;
+          if (typeof result.turn_sequence === 'number') {
+            setMessages((prev) => assignTurnSequenceToLatestUserMessage(prev, result.turn_sequence!));
+          }
           onConstraintsUpdate?.({
             tokensRemaining: result.constraints_remaining.tokens_remaining,
             interactionsRemaining: result.constraints_remaining.interactions_remaining,

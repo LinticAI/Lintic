@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Download, Moon, Sun, MessageSquare, Code, Activity, User, Terminal, ChevronDown, ChevronUp, Info, Zap, Cpu, LifeBuoy } from 'lucide-react';
+import { ChevronRight, Download, Moon, Sun, MessageSquare, Code, Activity, User, Terminal, ChevronDown, ChevronUp, Info, Zap, Cpu, LifeBuoy, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   buildCodeStateSnapshot,
@@ -230,8 +230,60 @@ type ConversationItem =
   | { kind: 'message'; entry: ConversationEntry }
   | { kind: 'toolGroup'; id: string; entries: ConversationEntry[]; eventIndex: number; timestamp: number };
 
+interface RewindBlock {
+  kind: 'rewindBlock';
+  id: string;
+  insertAfterTimestamp: number;
+  messages: Array<{
+    id: number;
+    role: string;
+    content: string;
+    created_at: number;
+  }>;
+}
+
 function isToolEntry(entry: ConversationEntry): boolean {
   return entry.title === 'Tool Call' || entry.title === 'Tool Result';
+}
+
+function computeRewindBlocks(
+  rawMessages: NonNullable<ReviewDataPayload['raw_messages']>,
+): RewindBlock[] {
+  const blocks: RewindBlock[] = [];
+  let currentBlock: RewindBlock | null = null;
+  let lastNonRewoundTimestamp = 0;
+
+  for (const msg of rawMessages) {
+    if (msg.rewound_at !== null) {
+      if (!currentBlock) {
+        currentBlock = {
+          kind: 'rewindBlock',
+          id: `rewind-${msg.id}`,
+          insertAfterTimestamp: lastNonRewoundTimestamp,
+          messages: [],
+        };
+      }
+      currentBlock.messages.push({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        created_at: msg.created_at,
+      });
+      continue;
+    }
+
+    if (currentBlock) {
+      blocks.push(currentBlock);
+      currentBlock = null;
+    }
+    lastNonRewoundTimestamp = msg.created_at;
+  }
+
+  if (currentBlock) {
+    blocks.push(currentBlock);
+  }
+
+  return blocks;
 }
 
 function groupConversationEntries(entries: ConversationEntry[]): ConversationItem[] {
@@ -447,6 +499,7 @@ export function ReviewDashboard({
   const [selectedEventIndex, setSelectedEventIndex] = useState(0);
   const [activeBranchId, setActiveBranchId] = useState<string | null>(null);
   const [showMetricDetails, setShowMetricDetails] = useState(false);
+  const [expandedRewindBlocks, setExpandedRewindBlocks] = useState<Set<string>>(new Set());
   const conversationRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   useEffect(() => {
@@ -492,6 +545,10 @@ export function ReviewDashboard({
   const selectedEvent = events[selectedEventIndex] ?? null;
   const conversationEntries = useMemo(() => buildConversationEntries(events), [events]);
   const conversationItems = useMemo(() => groupConversationEntries(conversationEntries), [conversationEntries]);
+  const rewindBlocks = useMemo(
+    () => computeRewindBlocks(data?.raw_messages ?? []),
+    [data],
+  );
   const anchorIndex = useMemo(
     () => getConversationAnchorIndex(conversationEntries, selectedEventIndex),
     [conversationEntries, selectedEventIndex],
@@ -531,6 +588,42 @@ export function ReviewDashboard({
     }
     return conversationItems.length - 1;
   }, [conversationItems, anchorIndex]);
+
+  const renderItems = useMemo(() => {
+    const items: Array<
+      | { kind: 'conversation'; item: ConversationItem; itemIndex: number }
+      | { kind: 'rewind'; block: RewindBlock }
+    > = [];
+    let rewindIndex = 0;
+
+    const pushPendingBlocks = (nextTimestamp: number) => {
+      while (rewindIndex < rewindBlocks.length) {
+        const block = rewindBlocks[rewindIndex];
+        if (!block || block.insertAfterTimestamp >= nextTimestamp) {
+          break;
+        }
+        items.push({ kind: 'rewind', block });
+        rewindIndex += 1;
+      }
+    };
+
+    conversationItems.forEach((item, itemIndex) => {
+      const itemTimestamp = item.kind === 'toolGroup' ? item.timestamp : item.entry.timestamp;
+      pushPendingBlocks(itemTimestamp);
+      items.push({ kind: 'conversation', item, itemIndex });
+    });
+
+    while (rewindIndex < rewindBlocks.length) {
+      const block = rewindBlocks[rewindIndex];
+      if (!block) {
+        break;
+      }
+      items.push({ kind: 'rewind', block });
+      rewindIndex += 1;
+    }
+
+    return items;
+  }, [conversationItems, rewindBlocks]);
 
   useEffect(() => {
     conversationRefs.current[anchorItemIndex]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -686,7 +779,74 @@ export function ReviewDashboard({
               </div>
 
               <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-3 no-scrollbar">
-                {conversationItems.map((item, itemIndex) => {
+                {renderItems.map((renderItem) => {
+                  if (renderItem.kind === 'rewind') {
+                    const { block } = renderItem;
+                    const isExpanded = expandedRewindBlocks.has(block.id);
+
+                    return (
+                      <div
+                        key={block.id}
+                        className="overflow-hidden rounded-xl border border-white/8"
+                        style={{ background: 'rgba(255,255,255,0.02)' }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExpandedRewindBlocks((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(block.id)) {
+                                next.delete(block.id);
+                              } else {
+                                next.add(block.id);
+                              }
+                              return next;
+                            });
+                          }}
+                          className="flex w-full items-center justify-between px-4 py-2.5 text-left transition hover:bg-white/4"
+                          style={{ color: 'var(--color-text-dim)' }}
+                        >
+                          <div className="flex items-center gap-2 text-[11px] font-medium">
+                            <RotateCcw size={12} />
+                            <span>Rewound here</span>
+                            <span className="opacity-55">
+                              {block.messages.length} {block.messages.length === 1 ? 'message' : 'messages'} hidden
+                            </span>
+                          </div>
+                          <ChevronDown
+                            size={13}
+                            style={{
+                              transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                              transition: 'transform 160ms ease',
+                            }}
+                          />
+                        </button>
+
+                        {isExpanded ? (
+                          <div className="space-y-3 border-t border-white/8 px-4 py-3">
+                            {block.messages.map((message) => (
+                              <div key={message.id} className="text-[12px]" style={{ color: 'var(--color-text-dim)' }}>
+                                <div className="mb-1 flex items-center gap-2">
+                                  <span className="font-medium" style={{ color: 'var(--color-text-dimmest)' }}>
+                                    {message.role === 'user' ? 'You' : 'Agent'}
+                                  </span>
+                                  <span className="font-mono text-[10px]" style={{ color: 'var(--color-text-dimmest)' }}>
+                                    {formatTimestamp(message.created_at)}
+                                  </span>
+                                </div>
+                                <div className="whitespace-pre-wrap break-words opacity-75">
+                                  {message.content.slice(0, 200)}
+                                  {message.content.length > 200 ? '…' : ''}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  }
+
+                  const { item, itemIndex } = renderItem;
                   const itemEventIndex = item.kind === 'toolGroup' ? item.eventIndex : item.entry.eventIndex;
                   const isPast = itemEventIndex <= selectedEventIndex;
                   const isAnchor = itemIndex === anchorItemIndex;
