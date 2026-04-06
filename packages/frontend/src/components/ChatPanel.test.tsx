@@ -901,7 +901,6 @@ describe('ChatPanel', () => {
     expect(screen.getByTestId('clear-chat-button')).toBeInTheDocument();
     expect(screen.getByTestId('generate-repo-map-button')).toBeInTheDocument();
     expect(screen.getByTestId('generate-summary-button')).toBeInTheDocument();
-    expect(screen.getByTestId('conversation-item-conv-0')).toBeInTheDocument();
     expect(screen.getByTestId('context-file-src/app.ts')).toBeInTheDocument();
     expect(screen.getByTestId('context-resource-repo-1')).toBeInTheDocument();
     expect(screen.getByTestId('context-prior-conversation-conv-0')).toBeInTheDocument();

@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { marked, Renderer } from 'marked';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github-dark.css';
-import { 
-  Send, 
-  CornerDownLeft, 
-  ChevronDown, 
-  Square, 
+import {
+  Send,
+  CornerDownLeft,
+  ChevronDown,
+  Square,
   MessageSquare,
   AlertCircle,
   Bookmark,
@@ -15,9 +15,9 @@ import {
   Plus,
   RefreshCw,
   FileText,
-  Clock3,
   FolderTree,
-  Layers3
+  Layers3,
+  RotateCcw,
 } from 'lucide-react';
 import { ToolActionCard } from './ToolActionCard.js';
 import type { LocalToolAction, LocalToolCall, LocalToolResult } from './ToolActionCard.js';
@@ -1363,17 +1363,12 @@ export function ChatPanel({
               data-testid="context-panel"
             >
               <div className="border-b border-white/8 px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[12px] font-semibold" style={{ color: 'var(--color-text-main)' }}>
-                      Context tools
-                    </div>
-                    <div className="text-[11px] opacity-60" style={{ color: 'var(--color-text-dim)' }}>
-                      {Math.round(tokenUsagePct)}% of the window is in use
-                    </div>
+                <div>
+                  <div className="text-[12px] font-semibold" style={{ color: 'var(--color-text-main)' }}>
+                    Context
                   </div>
                   <div className="text-[11px] opacity-60" style={{ color: 'var(--color-text-dim)' }}>
-                    {activeConversationId ? conversations.find((conversation) => conversation.id === activeConversationId)?.title ?? 'New chat' : 'Loading'}
+                    {Math.round(tokenUsagePct)}% of window in use
                   </div>
                 </div>
               </div>
@@ -1384,86 +1379,50 @@ export function ChatPanel({
                     type="button"
                     onClick={() => void handleCreateConversation()}
                     disabled={contextBusy || loading}
-                    className="inline-flex items-center gap-1.5 rounded-full bg-white/6 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10 disabled:opacity-40"
+                    className="inline-flex items-center gap-1.5 rounded-[var(--assessment-radius-control)] bg-white/10 px-3 py-1.5 text-[12px] font-medium transition hover:bg-white/15 disabled:opacity-40"
                     style={{ color: 'var(--color-text-main)' }}
                     data-testid="new-chat-button"
                   >
-                    <Plus size={12} />
+                    <Plus size={13} />
                     New chat
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleCreateConversation()}
                     disabled={contextBusy || loading}
-                    className="inline-flex items-center gap-1.5 rounded-full bg-white/6 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10 disabled:opacity-40"
-                    style={{ color: 'var(--color-text-main)' }}
+                    className="inline-flex items-center gap-1.5 rounded-[var(--assessment-radius-control)] bg-white/6 px-3 py-1.5 text-[12px] font-medium transition hover:bg-white/10 disabled:opacity-40"
+                    style={{ color: 'var(--color-text-dim)' }}
                     data-testid="clear-chat-button"
                   >
-                    <X size={12} />
+                    <X size={13} />
                     Clear
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleGenerateRepoMap()}
                     disabled={contextBusy}
-                    className="inline-flex items-center gap-1.5 rounded-full bg-white/6 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10 disabled:opacity-40"
-                    style={{ color: 'var(--color-text-main)' }}
+                    className="inline-flex items-center gap-1.5 rounded-[var(--assessment-radius-control)] bg-white/6 px-3 py-1.5 text-[12px] font-medium transition hover:bg-white/10 disabled:opacity-40"
+                    style={{ color: 'var(--color-text-dim)' }}
                     data-testid="generate-repo-map-button"
                   >
-                    <FolderTree size={12} />
+                    <FolderTree size={13} />
                     Refresh repo map
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleGenerateSummary()}
                     disabled={contextBusy || !activeConversationId}
-                    className="inline-flex items-center gap-1.5 rounded-full bg-white/6 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10 disabled:opacity-40"
-                    style={{ color: 'var(--color-text-main)' }}
+                    className="inline-flex items-center gap-1.5 rounded-[var(--assessment-radius-control)] bg-white/6 px-3 py-1.5 text-[12px] font-medium transition hover:bg-white/10 disabled:opacity-40"
+                    style={{ color: 'var(--color-text-dim)' }}
                     data-testid="generate-summary-button"
                   >
-                    <RefreshCw size={12} className={contextBusy ? 'animate-spin' : ''} />
+                    <RefreshCw size={13} className={contextBusy ? 'animate-spin' : ''} />
                     Summarize chat
                   </button>
                 </div>
 
                 <div className="mb-4">
-                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--color-text-dim)' }}>
-                    <Clock3 size={11} />
-                    Conversation history
-                  </div>
-                  <div className="space-y-1">
-                    {conversations.map((conversation) => {
-                      const active = conversation.id === activeConversationId;
-                      return (
-                        <button
-                          key={conversation.id}
-                          type="button"
-                          onClick={() => {
-                            setActiveConversationId(conversation.id);
-                            setContextPanelOpen(false);
-                          }}
-                          className="flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left transition hover:bg-white/6"
-                          style={{
-                            background: active ? 'rgba(255,255,255,0.07)' : 'transparent',
-                            color: 'var(--color-text-main)',
-                          }}
-                          data-testid={`conversation-item-${conversation.id}`}
-                        >
-                          <span className="min-w-0">
-                            <span className="block truncate text-[12px] font-medium">{conversation.title}</span>
-                            <span className="block truncate text-[11px] opacity-55">
-                              {formatConversationTimestamp(conversation.updated_at)}
-                            </span>
-                          </span>
-                          {active ? <Check size={13} /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="mb-4">
-                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--color-text-dim)' }}>
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-medium" style={{ color: 'var(--color-text-dim)' }}>
                     <FileText size={11} />
                     File context
                   </div>
@@ -1490,7 +1449,7 @@ export function ChatPanel({
                 </div>
 
                 <div className="mb-4">
-                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--color-text-dim)' }}>
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-medium" style={{ color: 'var(--color-text-dim)' }}>
                     <Layers3 size={11} />
                     Saved summaries
                   </div>
@@ -1522,7 +1481,7 @@ export function ChatPanel({
                 </div>
 
                 <div>
-                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--color-text-dim)' }}>
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-medium" style={{ color: 'var(--color-text-dim)' }}>
                     <MessageSquare size={11} />
                     Prior chat snapshots
                   </div>
