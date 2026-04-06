@@ -978,13 +978,21 @@ export class SQLiteAdapter implements DatabaseAdapter {
     });
   }
 
-  getBranchMessages(sessionId: string, branchId: string, conversationId?: string): Promise<StoredMessage[]> {
+  getBranchMessages(
+    sessionId: string,
+    branchId: string,
+    conversationId?: string,
+    options?: { includeRewound?: boolean },
+  ): Promise<StoredMessage[]> {
+    const includeRewound = options?.includeRewound ?? false;
+    const rewoundFilter = includeRewound ? '' : 'AND rewound_at IS NULL';
+
     const rows = conversationId
       ? this.db.prepare(
-          'SELECT * FROM messages WHERE session_id = ? AND branch_id = ? AND conversation_id = ? ORDER BY id ASC',
+          `SELECT * FROM messages WHERE session_id = ? AND branch_id = ? AND conversation_id = ? ${rewoundFilter} ORDER BY id ASC`,
         ).all(sessionId, branchId, conversationId) as MessageRow[]
       : this.db.prepare(
-          'SELECT * FROM messages WHERE session_id = ? AND branch_id = ? ORDER BY id ASC',
+          `SELECT * FROM messages WHERE session_id = ? AND branch_id = ? ${rewoundFilter} ORDER BY id ASC`,
         ).all(sessionId, branchId) as MessageRow[];
 
     return Promise.resolve(rows.map((r) => ({
@@ -997,8 +1005,20 @@ export class SQLiteAdapter implements DatabaseAdapter {
       content: r.content,
       token_count: r.token_count,
       created_at: r.created_at,
-      rewound_at: r.rewound_at === null ? null : Number(r.rewound_at),
+      rewound_at: r.rewound_at ?? null,
     })));
+  }
+
+  rewindMessages(
+    sessionId: string,
+    branchId: string,
+    conversationId: string,
+    afterTurnSequence: number,
+  ): Promise<void> {
+    this.db.prepare(
+      'UPDATE messages SET rewound_at = ? WHERE session_id = ? AND branch_id = ? AND conversation_id = ? AND turn_sequence > ?',
+    ).run(Date.now(), sessionId, branchId, conversationId, afterTurnSequence);
+    return Promise.resolve();
   }
 
   getMessages(sessionId: string): Promise<StoredMessage[]> {
@@ -1720,15 +1740,22 @@ export class PostgresAdapter implements DatabaseAdapter {
     await this.addBranchMessage(sessionId, branch.id, null, role, content, tokenCount);
   }
 
-  async getBranchMessages(sessionId: string, branchId: string, conversationId?: string): Promise<StoredMessage[]> {
+  async getBranchMessages(
+    sessionId: string,
+    branchId: string,
+    conversationId?: string,
+    options?: { includeRewound?: boolean },
+  ): Promise<StoredMessage[]> {
     await this.initialize();
+    const includeRewound = options?.includeRewound ?? false;
+    const rewoundFilter = includeRewound ? '' : 'AND rewound_at IS NULL';
     const result = conversationId
       ? await this.pool.query<MessageRow>(
-          'SELECT * FROM messages WHERE session_id = $1 AND branch_id = $2 AND conversation_id = $3 ORDER BY id ASC',
+          `SELECT * FROM messages WHERE session_id = $1 AND branch_id = $2 AND conversation_id = $3 ${rewoundFilter} ORDER BY id ASC`,
           [sessionId, branchId, conversationId],
         )
       : await this.pool.query<MessageRow>(
-          'SELECT * FROM messages WHERE session_id = $1 AND branch_id = $2 ORDER BY id ASC',
+          `SELECT * FROM messages WHERE session_id = $1 AND branch_id = $2 ${rewoundFilter} ORDER BY id ASC`,
           [sessionId, branchId],
         );
 
@@ -1744,6 +1771,19 @@ export class PostgresAdapter implements DatabaseAdapter {
       created_at: Number(row.created_at),
       rewound_at: row.rewound_at === null ? null : Number(row.rewound_at),
     }));
+  }
+
+  async rewindMessages(
+    sessionId: string,
+    branchId: string,
+    conversationId: string,
+    afterTurnSequence: number,
+  ): Promise<void> {
+    await this.initialize();
+    await this.pool.query(
+      'UPDATE messages SET rewound_at = $1 WHERE session_id = $2 AND branch_id = $3 AND conversation_id = $4 AND turn_sequence > $5',
+      [Date.now(), sessionId, branchId, conversationId, afterTurnSequence],
+    );
   }
 
   async getMessages(sessionId: string): Promise<StoredMessage[]> {

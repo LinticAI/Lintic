@@ -81,10 +81,10 @@ describe('PostgresAdapter', () => {
     const result = await adapter.createSession(BASE_CONFIG);
 
     const pool = latestPool();
-    const insert = pool.queries.at(-1);
-    expect(insert?.text).toContain('INSERT INTO sessions');
-    expect(insert?.params?.[2]).toBe('library-api');
-    expect(insert?.params?.[3]).toBe('alice@example.com');
+    const sessionInsert = pool.queries.find((q) => q.text.includes('INSERT INTO sessions'));
+    expect(sessionInsert?.text).toContain('INSERT INTO sessions');
+    expect(sessionInsert?.params?.[2]).toBe('library-api');
+    expect(sessionInsert?.params?.[3]).toBe('alice@example.com');
     expect(result.id).toMatch(/[0-9a-f-]{36}/i);
     expect(result.token).toHaveLength(64);
   });
@@ -132,20 +132,25 @@ describe('PostgresAdapter', () => {
     const adapter = new PostgresAdapter({ connectionString: 'postgres://lintic:test@localhost/lintic' });
     await adapter.initialize();
     const pool = latestPool();
+    // getMessages calls getMainBranch first, then getBranchMessages
+    pool.queue.push({
+      rows: [{ id: 'branch-1', session_id: 'session-1', name: 'main', parent_branch_id: null, forked_from_sequence: null, created_at: '100' }],
+      rowCount: 1,
+    });
     pool.queue.push({
       rows: [
-        { id: '1', session_id: 'session-1', role: 'user', content: 'first', token_count: '5', created_at: '100' },
-        { id: '2', session_id: 'session-1', role: 'assistant', content: 'second', token_count: '8', created_at: '200' },
+        { id: '1', session_id: 'session-1', branch_id: 'branch-1', conversation_id: 'conv-1', turn_sequence: null, role: 'user', content: 'first', token_count: '5', created_at: '100', rewound_at: null },
+        { id: '2', session_id: 'session-1', branch_id: 'branch-1', conversation_id: 'conv-1', turn_sequence: null, role: 'assistant', content: 'second', token_count: '8', created_at: '200', rewound_at: null },
       ],
       rowCount: 2,
     });
 
     const messages = await adapter.getMessages('session-1');
 
-    expect(pool.queries.at(-1)?.text).toContain('ORDER BY id ASC');
+    expect(pool.queries.some((q) => q.text.includes('ORDER BY id ASC'))).toBe(true);
     expect(messages).toEqual([
-      { id: 1, session_id: 'session-1', role: 'user', content: 'first', token_count: 5, created_at: 100 },
-      { id: 2, session_id: 'session-1', role: 'assistant', content: 'second', token_count: 8, created_at: 200 },
+      { id: 1, session_id: 'session-1', branch_id: 'branch-1', conversation_id: 'conv-1', turn_sequence: null, role: 'user', content: 'first', token_count: 5, created_at: 100, rewound_at: null },
+      { id: 2, session_id: 'session-1', branch_id: 'branch-1', conversation_id: 'conv-1', turn_sequence: null, role: 'assistant', content: 'second', token_count: 8, created_at: 200, rewound_at: null },
     ]);
   });
 
@@ -153,17 +158,22 @@ describe('PostgresAdapter', () => {
     const adapter = new PostgresAdapter({ connectionString: 'postgres://lintic:test@localhost/lintic' });
     await adapter.initialize();
     const pool = latestPool();
+    // getReplayEvents calls getMainBranch first, then getBranchReplayEvents
+    pool.queue.push({
+      rows: [{ id: 'branch-1', session_id: 'session-1', name: 'main', parent_branch_id: null, forked_from_sequence: null, created_at: '100' }],
+      rowCount: 1,
+    });
     pool.queue.push({
       rows: [
-        { id: '1', session_id: 'session-1', type: 'message', timestamp: '1000', payload: '{"a":1}' },
-        { id: '2', session_id: 'session-1', type: 'agent_response', timestamp: '1000', payload: '{"b":2}' },
+        { id: '1', session_id: 'session-1', branch_id: 'branch-1', conversation_id: 'conv-1', turn_sequence: null, type: 'message', timestamp: '1000', payload: '{"a":1}' },
+        { id: '2', session_id: 'session-1', branch_id: 'branch-1', conversation_id: 'conv-1', turn_sequence: null, type: 'agent_response', timestamp: '1000', payload: '{"b":2}' },
       ],
       rowCount: 2,
     });
 
     const events = await adapter.getReplayEvents('session-1');
 
-    expect(pool.queries.at(-1)?.text).toContain('ORDER BY timestamp ASC, id ASC');
+    expect(pool.queries.some((q) => q.text.includes('ORDER BY timestamp ASC, id ASC'))).toBe(true);
     expect(events[0]?.payload).toEqual({ a: 1 });
     expect(events[1]?.payload).toEqual({ b: 2 });
   });

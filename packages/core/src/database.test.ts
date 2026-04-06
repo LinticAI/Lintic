@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest';
+import { describe, it, test, expect, beforeEach } from 'vitest';
 import { SQLiteAdapter } from './database.js';
 import type { CreateSessionConfig } from './database.js';
 import type { Constraint } from './types.js';
@@ -356,5 +356,30 @@ describe('assessment link usage tracking', () => {
     const db = makeAdapter();
     const created = await db.createSession(BASE_CONFIG);
     await expect(db.getSessionToken(created.id)).resolves.toBe(created.token);
+  });
+
+  it('rewindMessages soft-hides messages after a turn sequence', async () => {
+    const db = new SQLiteAdapter(':memory:');
+    const { id: sessionId } = await db.createSession({
+      prompt_id: 'p1',
+      candidate_email: 'a@b.com',
+      constraint: { max_session_tokens: 1000, max_message_tokens: 500, max_interactions: 10, context_window: 8000, time_limit_minutes: 60 },
+    });
+    const branch = await db.getMainBranch(sessionId);
+    const conversation = await db.getMainConversation(sessionId, branch!.id);
+    await db.addBranchMessage(sessionId, branch!.id, 1, 'user', 'first', 0, conversation!.id);
+    await db.addBranchMessage(sessionId, branch!.id, 1, 'assistant', 'reply', 0, conversation!.id);
+    await db.addBranchMessage(sessionId, branch!.id, 2, 'user', 'second', 0, conversation!.id);
+    await db.addBranchMessage(sessionId, branch!.id, 2, 'assistant', 'reply2', 0, conversation!.id);
+
+    await db.rewindMessages(sessionId, branch!.id, conversation!.id, 1);
+
+    const visible = await db.getBranchMessages(sessionId, branch!.id, conversation!.id);
+    expect(visible).toHaveLength(2);
+    expect(visible.every((m) => m.turn_sequence === 1)).toBe(true);
+
+    const all = await db.getBranchMessages(sessionId, branch!.id, conversation!.id, { includeRewound: true });
+    expect(all).toHaveLength(4);
+    expect(all.filter((m) => m.rewound_at !== null)).toHaveLength(2);
   });
 });
