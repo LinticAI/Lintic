@@ -1044,16 +1044,16 @@ export function ChatPanel({
                         >
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={() => { void (async () => {
                               setRewindPopoverFor(null);
                               const ts = msg.turnSequence as number;
+                              await onRewind!(ts, 'both');
                               setMessages((prev) => prev.filter((m) => {
-                                if (m.turnSequence === null || m.turnSequence === undefined) return true;
+                                if (m.turnSequence === null || m.turnSequence === undefined) return false;
                                 return (m.turnSequence as number) <= ts;
                               }));
                               setInput(msg.content);
-                              void onRewind!(ts, 'both');
-                            }}
+                            })(); }}
                             className="px-4 py-2.5 text-left text-[12px] transition hover:bg-white/8"
                             style={{ color: 'var(--color-text-main)' }}
                           >

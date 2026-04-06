@@ -382,7 +382,7 @@ export function App() {
     if (!sessionId || !sessionToken || !activeBranchId) return;
 
     if (mode === 'both') {
-      await fetch(`/api/sessions/${sessionId}/rewind`, {
+      const res = await fetch(`/api/sessions/${sessionId}/rewind`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${sessionToken}`,
@@ -390,6 +390,9 @@ export function App() {
         },
         body: JSON.stringify({ branch_id: activeBranchId, turn_sequence: turnSequence }),
       });
+      if (!res.ok) {
+        throw new Error(`Rewind failed: ${res.status}`);
+      }
     }
 
     const restored = await restoreFiles(sessionId, sessionToken, activeBranchId, '', turnSequence);
