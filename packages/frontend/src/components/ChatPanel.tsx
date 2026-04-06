@@ -179,6 +179,7 @@ interface ChatPanelProps {
   onCreateBranch?: (name: string, turnSequence: number, conversationId?: string) => Promise<void> | void;
   onTurnComplete?: (turnSequence: number) => void;
   activeFilePath?: string | null;
+  onRewind?: (turnSequence: number, mode: 'code' | 'both') => Promise<void>;
 }
 
 function generateId() {
@@ -341,6 +342,7 @@ export function ChatPanel({
   onCreateBranch,
   onTurnComplete,
   activeFilePath,
+  onRewind,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -357,6 +359,7 @@ export function ChatPanel({
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [contextPanelOpen, setContextPanelOpen] = useState(false);
+  const [rewindPopoverFor, setRewindPopoverFor] = useState<string | null>(null);
   const [contextBusy, setContextBusy] = useState(false);
   const [contextAttachments, setContextAttachments] = useState<ContextAttachment[]>([]);
   const [contextFiles, setContextFiles] = useState<ContextCandidateFile[]>([]);
@@ -479,6 +482,22 @@ export function ChatPanel({
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [contextPanelOpen]);
+
+  useEffect(() => {
+    if (!rewindPopoverFor) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Element;
+      if (!target.closest('[data-rewind-popover]')) {
+        setRewindPopoverFor(null);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [rewindPopoverFor]);
 
   useEffect(() => {
     setMessages([]);
@@ -994,8 +1013,11 @@ export function ChatPanel({
             
             if (isUser) {
               const msg = group.messages[0]!;
+              const canRewind = !!onRewind && typeof msg.turnSequence === 'number';
+              const isRewindOpen = rewindPopoverFor === msg.id;
+
               return (
-                <div key={msg.id} className="flex flex-col py-1">
+                <div key={msg.id} className="group/msg relative flex flex-col py-1">
                   <div
                     className="w-full rounded-[var(--assessment-radius-shell)] px-6 py-4 text-[14px] whitespace-pre-wrap break-words border-none shadow-none"
                     style={{ background: 'var(--color-bg-user-msg)', color: 'var(--color-text-user-msg)' }}
@@ -1003,6 +1025,55 @@ export function ChatPanel({
                   >
                     {msg.content}
                   </div>
+                  {canRewind && (
+                    <div className="absolute top-3 right-3" data-rewind-popover>
+                      <button
+                        type="button"
+                        onClick={() => setRewindPopoverFor(isRewindOpen ? null : msg.id)}
+                        className="flex items-center justify-center rounded-full w-7 h-7 opacity-0 group-hover/msg:opacity-100 transition-opacity hover:bg-white/10"
+                        style={{ color: 'var(--color-text-dim)' }}
+                        title="Rewind to here"
+                        data-testid="rewind-button"
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                      {isRewindOpen && (
+                        <div
+                          className="absolute right-0 top-full mt-1 z-50 flex flex-col overflow-hidden rounded-[var(--assessment-radius-control)] border border-white/10 shadow-2xl"
+                          style={{ background: 'rgba(19,19,20,0.98)', backdropFilter: 'blur(10px)', minWidth: '180px' }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRewindPopoverFor(null);
+                              const ts = msg.turnSequence as number;
+                              setMessages((prev) => prev.filter((m) => {
+                                if (m.turnSequence === null || m.turnSequence === undefined) return true;
+                                return (m.turnSequence as number) <= ts;
+                              }));
+                              setInput(msg.content);
+                              void onRewind!(ts, 'both');
+                            }}
+                            className="px-4 py-2.5 text-left text-[12px] transition hover:bg-white/8"
+                            style={{ color: 'var(--color-text-main)' }}
+                          >
+                            Rewind code + conversation
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRewindPopoverFor(null);
+                              void onRewind!(msg.turnSequence as number, 'code');
+                            }}
+                            className="px-4 py-2.5 text-left text-[12px] transition hover:bg-white/8 border-t border-white/8"
+                            style={{ color: 'var(--color-text-dim)' }}
+                          >
+                            Rewind code only
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             }
