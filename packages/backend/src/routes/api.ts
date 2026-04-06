@@ -7,8 +7,6 @@ import type {
   AgentRequestMode,
   AssessmentLinkRecord,
   AssessmentLinkStatus,
-  ContextAttachment,
-  ContextResource,
   DatabaseAdapter,
   AgentAdapter,
   Config,

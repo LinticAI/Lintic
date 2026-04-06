@@ -1883,16 +1883,21 @@ describe('conversation context APIs', () => {
         source_conversation_id: mainConversation!.id,
         active_path: 'src/app.ts',
       });
+    const createBody = createResponse.body as {
+      branch: SessionBranch;
+      conversation: ConversationSummary;
+      attachments: ContextAttachment[];
+    };
 
     expect(createResponse.status).toBe(201);
-    expect(createResponse.body.branch.id).toBe(branch!.id);
-    expect(createResponse.body.attachments).toEqual(
+    expect(createBody.branch.id).toBe(branch!.id);
+    expect(createBody.attachments).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: 'file', path: 'src/app.ts' }),
       ]),
     );
 
-    const nextConversationId = createResponse.body.conversation.id as string;
+    const nextConversationId = createBody.conversation.id;
     await db.addBranchMessage(id, branch!.id, 2, 'user', 'second conversation message', 0, nextConversationId);
 
     const messagesResponse = await request(app)
@@ -1902,10 +1907,14 @@ describe('conversation context APIs', () => {
         branch_id: branch!.id,
         conversation_id: nextConversationId,
       });
+    const messagesBody = messagesResponse.body as {
+      active_conversation_id: string | null;
+      messages: Array<{ content: string; conversation_id: string }>;
+    };
 
     expect(messagesResponse.status).toBe(200);
-    expect(messagesResponse.body.active_conversation_id).toBe(nextConversationId);
-    expect(messagesResponse.body.messages).toEqual([
+    expect(messagesBody.active_conversation_id).toBe(nextConversationId);
+    expect(messagesBody.messages).toEqual([
       expect.objectContaining({
         content: 'second conversation message',
         conversation_id: nextConversationId,
