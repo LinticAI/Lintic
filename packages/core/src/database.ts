@@ -3,6 +3,11 @@ import Database from 'better-sqlite3';
 import { Pool, type PoolConfig } from 'pg';
 import type {
   AssessmentLinkRecord,
+  ContextAttachment,
+  ContextAttachmentKind,
+  ContextResource,
+  ContextResourceKind,
+  ConversationSummary,
   MockPgPoolExport,
   Session,
   SessionBranch,
@@ -22,6 +27,7 @@ export interface StoredMessage {
   id: number;
   session_id: string;
   branch_id: string;
+  conversation_id: string;
   turn_sequence: number | null;
   role: MessageRole;
   content: string;
@@ -35,6 +41,7 @@ export interface StoredReplayEvent {
   id: number;
   session_id: string;
   branch_id: string;
+  conversation_id: string;
   turn_sequence: number | null;
   type: ReplayEventType;
   timestamp: number; // Unix ms
@@ -46,6 +53,38 @@ export interface CreateBranchConfig {
   name: string;
   parent_branch_id: string;
   forked_from_sequence: number;
+  conversation_id?: string;
+}
+
+export interface CreateConversationConfig {
+  session_id: string;
+  branch_id: string;
+  title?: string;
+  archived?: boolean;
+}
+
+export interface UpdateConversationConfig {
+  session_id: string;
+  conversation_id: string;
+  title?: string;
+  archived?: boolean;
+}
+
+export interface ContextAttachmentInput {
+  kind: ContextAttachmentKind;
+  label: string;
+  path?: string;
+  resource_id?: string;
+  source_conversation_id?: string;
+}
+
+export interface ContextResourceInput {
+  session_id: string;
+  branch_id: string;
+  kind: ContextResourceKind;
+  title: string;
+  content: string;
+  source_conversation_id?: string;
 }
 
 export interface WorkspaceSnapshotInput {
@@ -102,6 +141,11 @@ export interface DatabaseAdapter {
   getBranch(sessionId: string, branchId: string): Promise<SessionBranch | null>;
   listBranches(sessionId: string): Promise<SessionBranch[]>;
   createBranch(config: CreateBranchConfig): Promise<SessionBranch>;
+  getMainConversation(sessionId: string, branchId: string): Promise<ConversationSummary | null>;
+  getConversation(sessionId: string, conversationId: string): Promise<ConversationSummary | null>;
+  listConversations(sessionId: string, branchId: string): Promise<ConversationSummary[]>;
+  createConversation(config: CreateConversationConfig): Promise<ConversationSummary>;
+  updateConversation(config: UpdateConversationConfig): Promise<ConversationSummary | null>;
   allocateTurnSequence(sessionId: string): Promise<number>;
   addBranchMessage(
     sessionId: string,
@@ -110,8 +154,9 @@ export interface DatabaseAdapter {
     role: MessageRole,
     content: string,
     tokenCount: number,
+    conversationId?: string,
   ): Promise<void>;
-  getBranchMessages(sessionId: string, branchId: string): Promise<StoredMessage[]>;
+  getBranchMessages(sessionId: string, branchId: string, conversationId?: string): Promise<StoredMessage[]>;
   addBranchReplayEvent(
     sessionId: string,
     branchId: string,
@@ -119,8 +164,13 @@ export interface DatabaseAdapter {
     type: ReplayEventType,
     timestamp: number,
     payload: unknown,
+    conversationId?: string,
   ): Promise<void>;
-  getBranchReplayEvents(sessionId: string, branchId: string): Promise<StoredReplayEvent[]>;
+  getBranchReplayEvents(sessionId: string, branchId: string, conversationId?: string): Promise<StoredReplayEvent[]>;
+  listConversationContextAttachments(conversationId: string): Promise<ContextAttachment[]>;
+  replaceConversationContextAttachments(conversationId: string, attachments: ContextAttachmentInput[]): Promise<ContextAttachment[]>;
+  listContextResources(sessionId: string, branchId: string): Promise<ContextResource[]>;
+  upsertContextResource(input: ContextResourceInput): Promise<ContextResource>;
   upsertWorkspaceSnapshot(input: WorkspaceSnapshotInput): Promise<WorkspaceSnapshot>;
   createWorkspaceSnapshot(input: WorkspaceSnapshotInput): Promise<WorkspaceSnapshot>;
   getWorkspaceSnapshot(
@@ -157,6 +207,7 @@ interface MessageRow {
   id: number;
   session_id: string;
   branch_id: string;
+  conversation_id: string;
   turn_sequence: number | null;
   role: string;
   content: string;
@@ -168,6 +219,7 @@ interface ReplayEventRow {
   id: number;
   session_id: string;
   branch_id: string;
+  conversation_id: string;
   turn_sequence: number | null;
   type: string;
   timestamp: number;
@@ -181,6 +233,39 @@ interface SessionBranchRow {
   parent_branch_id: string | null;
   forked_from_sequence: number | null;
   created_at: number;
+}
+
+interface ConversationRow {
+  id: string;
+  session_id: string;
+  branch_id: string;
+  title: string;
+  archived: number | boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+interface ContextAttachmentRow {
+  id: string;
+  conversation_id: string;
+  kind: string;
+  label: string;
+  path: string | null;
+  resource_id: string | null;
+  source_conversation_id: string | null;
+  created_at: number;
+}
+
+interface ContextResourceRow {
+  id: string;
+  session_id: string;
+  branch_id: string;
+  kind: string;
+  title: string;
+  content: string;
+  source_conversation_id: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
 interface WorkspaceSnapshotRow {
@@ -233,6 +318,7 @@ const SQLITE_SCHEMA = `
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     branch_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
     turn_sequence INTEGER,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -244,6 +330,7 @@ const SQLITE_SCHEMA = `
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     branch_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
     turn_sequence INTEGER,
     type      TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
@@ -264,6 +351,48 @@ const SQLITE_SCHEMA = `
 
   CREATE UNIQUE INDEX IF NOT EXISTS idx_session_branches_name
     ON session_branches(session_id, name);
+
+  CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    branch_id TEXT NOT NULL REFERENCES session_branches(id),
+    title TEXT NOT NULL,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_conversations_branch
+    ON conversations(session_id, branch_id, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS context_resources (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    branch_id TEXT NOT NULL REFERENCES session_branches(id),
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_conversation_id TEXT REFERENCES conversations(id),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_context_resources_branch
+    ON context_resources(session_id, branch_id, kind, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS conversation_context_attachments (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    path TEXT,
+    resource_id TEXT REFERENCES context_resources(id),
+    source_conversation_id TEXT REFERENCES conversations(id),
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_conversation_context_attachments_conversation
+    ON conversation_context_attachments(conversation_id, created_at ASC);
 
   CREATE TABLE IF NOT EXISTS workspace_snapshots (
     id TEXT PRIMARY KEY,
@@ -322,6 +451,7 @@ const POSTGRES_SCHEMA_STATEMENTS = [
     id BIGSERIAL PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     branch_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
     turn_sequence BIGINT,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -332,6 +462,7 @@ const POSTGRES_SCHEMA_STATEMENTS = [
     id BIGSERIAL PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     branch_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
     turn_sequence BIGINT,
     type TEXT NOT NULL,
     timestamp BIGINT NOT NULL,
@@ -349,6 +480,42 @@ const POSTGRES_SCHEMA_STATEMENTS = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_session_branches_name
     ON session_branches(session_id, name)`,
+  `CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    branch_id TEXT NOT NULL REFERENCES session_branches(id),
+    title TEXT NOT NULL,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_conversations_branch
+    ON conversations(session_id, branch_id, updated_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS context_resources (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    branch_id TEXT NOT NULL REFERENCES session_branches(id),
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_conversation_id TEXT REFERENCES conversations(id),
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_context_resources_branch
+    ON context_resources(session_id, branch_id, kind, updated_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS conversation_context_attachments (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    path TEXT,
+    resource_id TEXT REFERENCES context_resources(id),
+    source_conversation_id TEXT REFERENCES conversations(id),
+    created_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_conversation_context_attachments_conversation
+    ON conversation_context_attachments(conversation_id, created_at ASC)`,
   `CREATE TABLE IF NOT EXISTS workspace_snapshots (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -400,8 +567,10 @@ export class SQLiteAdapter implements DatabaseAdapter {
     const migrations = [
       'ALTER TABLE messages ADD COLUMN branch_id TEXT',
       'ALTER TABLE messages ADD COLUMN turn_sequence INTEGER',
+      'ALTER TABLE messages ADD COLUMN conversation_id TEXT',
       'ALTER TABLE replay_events ADD COLUMN branch_id TEXT',
       'ALTER TABLE replay_events ADD COLUMN turn_sequence INTEGER',
+      'ALTER TABLE replay_events ADD COLUMN conversation_id TEXT',
     ];
 
     for (const statement of migrations) {
@@ -414,6 +583,49 @@ export class SQLiteAdapter implements DatabaseAdapter {
 
     this.db.exec("UPDATE messages SET branch_id = COALESCE(branch_id, 'main') WHERE branch_id IS NULL OR branch_id = ''");
     this.db.exec("UPDATE replay_events SET branch_id = COALESCE(branch_id, 'main') WHERE branch_id IS NULL OR branch_id = ''");
+    this.backfillSqliteConversations();
+  }
+
+  private backfillSqliteConversations(): void {
+    const branches = this.db.prepare(
+      'SELECT id, session_id, name, created_at FROM session_branches ORDER BY created_at ASC, id ASC',
+    ).all() as Array<{ id: string; session_id: string; name: string; created_at: number }>;
+
+    for (const branch of branches) {
+      let conversation = this.db.prepare(
+        "SELECT * FROM conversations WHERE branch_id = ? AND title = 'main' ORDER BY created_at ASC LIMIT 1",
+      ).get(branch.id) as ConversationRow | undefined;
+
+      if (!conversation) {
+        const id = randomUUID();
+        const timestamp = branch.created_at ?? Date.now();
+        this.db.prepare(
+          `INSERT INTO conversations (id, session_id, branch_id, title, archived, created_at, updated_at)
+           VALUES (?, ?, ?, 'main', 0, ?, ?)`,
+        ).run(id, branch.session_id, branch.id, timestamp, timestamp);
+        conversation = {
+          id,
+          session_id: branch.session_id,
+          branch_id: branch.id,
+          title: 'main',
+          archived: 0,
+          created_at: timestamp,
+          updated_at: timestamp,
+        };
+      }
+
+      this.db.prepare(
+        `UPDATE messages
+         SET conversation_id = ?
+         WHERE session_id = ? AND branch_id = ? AND (conversation_id IS NULL OR conversation_id = '')`,
+      ).run(conversation.id, branch.session_id, branch.id);
+
+      this.db.prepare(
+        `UPDATE replay_events
+         SET conversation_id = ?
+         WHERE session_id = ? AND branch_id = ? AND (conversation_id IS NULL OR conversation_id = '')`,
+      ).run(conversation.id, branch.session_id, branch.id);
+    }
   }
 
   createSession(config: CreateSessionConfig): Promise<{ id: string; token: string }> {
@@ -446,6 +658,12 @@ export class SQLiteAdapter implements DatabaseAdapter {
         id, session_id, name, parent_branch_id, forked_from_sequence, created_at
       ) VALUES (?, ?, 'main', NULL, NULL, ?)
     `).run(branchId, id, now);
+
+    this.db.prepare(`
+      INSERT INTO conversations (
+        id, session_id, branch_id, title, archived, created_at, updated_at
+      ) VALUES (?, ?, ?, 'main', 0, ?, ?)
+    `).run(randomUUID(), id, branchId, now, now);
 
     return Promise.resolve({ id, token });
   }
@@ -509,9 +727,94 @@ export class SQLiteAdapter implements DatabaseAdapter {
     return Promise.resolve(rows.map(rowToSessionBranch));
   }
 
+  getMainConversation(sessionId: string, branchId: string): Promise<ConversationSummary | null> {
+    const row = this.db.prepare(
+      "SELECT * FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' ORDER BY created_at ASC LIMIT 1",
+    ).get(sessionId, branchId) as ConversationRow | undefined;
+    return Promise.resolve(row ? rowToConversation(row) : null);
+  }
+
+  getConversation(sessionId: string, conversationId: string): Promise<ConversationSummary | null> {
+    const row = this.db.prepare(
+      'SELECT * FROM conversations WHERE session_id = ? AND id = ? LIMIT 1',
+    ).get(sessionId, conversationId) as ConversationRow | undefined;
+    return Promise.resolve(row ? rowToConversation(row) : null);
+  }
+
+  listConversations(sessionId: string, branchId: string): Promise<ConversationSummary[]> {
+    const rows = this.db.prepare(
+      'SELECT * FROM conversations WHERE session_id = ? AND branch_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC',
+    ).all(sessionId, branchId) as ConversationRow[];
+    return Promise.resolve(rows.map(rowToConversation));
+  }
+
+  createConversation(config: CreateConversationConfig): Promise<ConversationSummary> {
+    const id = randomUUID();
+    const createdAt = Date.now();
+    this.db.prepare(
+      `INSERT INTO conversations (
+        id, session_id, branch_id, title, archived, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      config.session_id,
+      config.branch_id,
+      config.title?.trim() || 'New chat',
+      config.archived ? 1 : 0,
+      createdAt,
+      createdAt,
+    );
+
+    return Promise.resolve({
+      id,
+      session_id: config.session_id,
+      branch_id: config.branch_id,
+      title: config.title?.trim() || 'New chat',
+      archived: config.archived ?? false,
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
+  }
+
+  updateConversation(config: UpdateConversationConfig): Promise<ConversationSummary | null> {
+    const existing = this.db.prepare(
+      'SELECT * FROM conversations WHERE session_id = ? AND id = ? LIMIT 1',
+    ).get(config.session_id, config.conversation_id) as ConversationRow | undefined;
+    if (!existing) {
+      return Promise.resolve(null);
+    }
+
+    const nextTitle = config.title?.trim() || existing.title;
+    const nextArchived = config.archived ?? Boolean(existing.archived);
+    const updatedAt = Date.now();
+    this.db.prepare(
+      `UPDATE conversations
+       SET title = ?, archived = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(nextTitle, nextArchived ? 1 : 0, updatedAt, config.conversation_id);
+
+    return Promise.resolve({
+      id: existing.id,
+      session_id: existing.session_id,
+      branch_id: existing.branch_id,
+      title: nextTitle,
+      archived: nextArchived,
+      created_at: Number(existing.created_at),
+      updated_at: updatedAt,
+    });
+  }
+
   createBranch(config: CreateBranchConfig): Promise<SessionBranch> {
     const id = randomUUID();
     const createdAt = Date.now();
+    const parentConversation = config.conversation_id
+      ? this.db.prepare(
+          'SELECT * FROM conversations WHERE session_id = ? AND id = ? LIMIT 1',
+        ).get(config.session_id, config.conversation_id) as ConversationRow | undefined
+      : this.db.prepare(
+          "SELECT * FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1",
+        ).get(config.session_id, config.parent_branch_id) as ConversationRow | undefined;
+
     this.db.prepare(
       `INSERT INTO session_branches (
         id, session_id, name, parent_branch_id, forked_from_sequence, created_at
@@ -525,25 +828,46 @@ export class SQLiteAdapter implements DatabaseAdapter {
       createdAt,
     );
 
+    const mainConversationId = randomUUID();
+    this.db.prepare(
+      `INSERT INTO conversations (
+        id, session_id, branch_id, title, archived, created_at, updated_at
+      ) VALUES (?, ?, ?, 'main', 0, ?, ?)`,
+    ).run(mainConversationId, config.session_id, id, createdAt, createdAt);
+
     this.db.prepare(
       `INSERT INTO messages (
-        session_id, branch_id, turn_sequence, role, content, token_count, created_at
+        session_id, branch_id, conversation_id, turn_sequence, role, content, token_count, created_at
       )
-      SELECT session_id, ?, turn_sequence, role, content, token_count, created_at
+      SELECT session_id, ?, ?, turn_sequence, role, content, token_count, created_at
       FROM messages
-      WHERE session_id = ? AND branch_id = ? AND turn_sequence IS NOT NULL AND turn_sequence <= ?
+      WHERE session_id = ? AND branch_id = ? AND conversation_id = ? AND turn_sequence IS NOT NULL AND turn_sequence <= ?
       ORDER BY id ASC`,
-    ).run(id, config.session_id, config.parent_branch_id, config.forked_from_sequence);
+    ).run(
+      id,
+      mainConversationId,
+      config.session_id,
+      config.parent_branch_id,
+      parentConversation?.id ?? '',
+      config.forked_from_sequence,
+    );
 
     this.db.prepare(
       `INSERT INTO replay_events (
-        session_id, branch_id, turn_sequence, type, timestamp, payload
+        session_id, branch_id, conversation_id, turn_sequence, type, timestamp, payload
       )
-      SELECT session_id, ?, turn_sequence, type, timestamp, payload
+      SELECT session_id, ?, ?, turn_sequence, type, timestamp, payload
       FROM replay_events
-      WHERE session_id = ? AND branch_id = ? AND turn_sequence IS NOT NULL AND turn_sequence <= ?
+      WHERE session_id = ? AND branch_id = ? AND conversation_id = ? AND turn_sequence IS NOT NULL AND turn_sequence <= ?
       ORDER BY timestamp ASC, id ASC`,
-    ).run(id, config.session_id, config.parent_branch_id, config.forked_from_sequence);
+    ).run(
+      id,
+      mainConversationId,
+      config.session_id,
+      config.parent_branch_id,
+      parentConversation?.id ?? '',
+      config.forked_from_sequence,
+    );
 
     const snapshot = this.db.prepare(
       `SELECT * FROM workspace_snapshots
@@ -609,11 +933,23 @@ export class SQLiteAdapter implements DatabaseAdapter {
     role: MessageRole,
     content: string,
     tokenCount: number,
+    conversationId?: string,
   ): Promise<void> {
+    const resolvedConversationId = conversationId ?? (
+      this.db.prepare(
+        "SELECT id FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1",
+      ).get(sessionId, branchId) as { id: string } | undefined
+    )?.id;
+    if (!resolvedConversationId) {
+      throw new Error(`Main conversation not found for branch ${branchId}`);
+    }
     this.db.prepare(`
-      INSERT INTO messages (session_id, branch_id, turn_sequence, role, content, token_count, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(sessionId, branchId, turnSequence, role, content, tokenCount, Date.now());
+      INSERT INTO messages (session_id, branch_id, conversation_id, turn_sequence, role, content, token_count, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(sessionId, branchId, resolvedConversationId, turnSequence, role, content, tokenCount, Date.now());
+    this.db.prepare(
+      'UPDATE conversations SET updated_at = ? WHERE id = ?',
+    ).run(Date.now(), resolvedConversationId);
     return Promise.resolve();
   }
 
@@ -626,15 +962,20 @@ export class SQLiteAdapter implements DatabaseAdapter {
     });
   }
 
-  getBranchMessages(sessionId: string, branchId: string): Promise<StoredMessage[]> {
-    const rows = this.db.prepare(
-      'SELECT * FROM messages WHERE session_id = ? AND branch_id = ? ORDER BY id ASC',
-    ).all(sessionId, branchId) as MessageRow[];
+  getBranchMessages(sessionId: string, branchId: string, conversationId?: string): Promise<StoredMessage[]> {
+    const rows = conversationId
+      ? this.db.prepare(
+          'SELECT * FROM messages WHERE session_id = ? AND branch_id = ? AND conversation_id = ? ORDER BY id ASC',
+        ).all(sessionId, branchId, conversationId) as MessageRow[]
+      : this.db.prepare(
+          'SELECT * FROM messages WHERE session_id = ? AND branch_id = ? ORDER BY id ASC',
+        ).all(sessionId, branchId) as MessageRow[];
 
     return Promise.resolve(rows.map((r) => ({
       id: r.id,
       session_id: r.session_id,
       branch_id: r.branch_id,
+      conversation_id: r.conversation_id,
       turn_sequence: r.turn_sequence === null ? null : Number(r.turn_sequence),
       role: r.role as MessageRole,
       content: r.content,
@@ -734,10 +1075,19 @@ export class SQLiteAdapter implements DatabaseAdapter {
     type: ReplayEventType,
     timestamp: number,
     payload: unknown,
+    conversationId?: string,
   ): Promise<void> {
+    const resolvedConversationId = conversationId ?? (
+      this.db.prepare(
+        "SELECT id FROM conversations WHERE session_id = ? AND branch_id = ? AND title = 'main' LIMIT 1",
+      ).get(sessionId, branchId) as { id: string } | undefined
+    )?.id;
+    if (!resolvedConversationId) {
+      throw new Error(`Main conversation not found for branch ${branchId}`);
+    }
     this.db.prepare(
-      'INSERT INTO replay_events (session_id, branch_id, turn_sequence, type, timestamp, payload) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(sessionId, branchId, turnSequence, type, timestamp, JSON.stringify(payload));
+      'INSERT INTO replay_events (session_id, branch_id, conversation_id, turn_sequence, type, timestamp, payload) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(sessionId, branchId, resolvedConversationId, turnSequence, type, timestamp, JSON.stringify(payload));
     return Promise.resolve();
   }
 
@@ -750,19 +1100,127 @@ export class SQLiteAdapter implements DatabaseAdapter {
     });
   }
 
-  getBranchReplayEvents(sessionId: string, branchId: string): Promise<StoredReplayEvent[]> {
-    const rows = this.db.prepare(
-      'SELECT * FROM replay_events WHERE session_id = ? AND branch_id = ? ORDER BY timestamp ASC, id ASC',
-    ).all(sessionId, branchId) as ReplayEventRow[];
+  getBranchReplayEvents(sessionId: string, branchId: string, conversationId?: string): Promise<StoredReplayEvent[]> {
+    const rows = conversationId
+      ? this.db.prepare(
+          'SELECT * FROM replay_events WHERE session_id = ? AND branch_id = ? AND conversation_id = ? ORDER BY timestamp ASC, id ASC',
+        ).all(sessionId, branchId, conversationId) as ReplayEventRow[]
+      : this.db.prepare(
+          'SELECT * FROM replay_events WHERE session_id = ? AND branch_id = ? ORDER BY timestamp ASC, id ASC',
+        ).all(sessionId, branchId) as ReplayEventRow[];
     return Promise.resolve(rows.map((r) => ({
       id: r.id,
       session_id: r.session_id,
       branch_id: r.branch_id,
+      conversation_id: r.conversation_id,
       turn_sequence: r.turn_sequence === null ? null : Number(r.turn_sequence),
       type: r.type as ReplayEventType,
       timestamp: r.timestamp,
       payload: JSON.parse(r.payload) as unknown,
     })));
+  }
+
+  listConversationContextAttachments(conversationId: string): Promise<ContextAttachment[]> {
+    const rows = this.db.prepare(
+      'SELECT * FROM conversation_context_attachments WHERE conversation_id = ? ORDER BY created_at ASC, id ASC',
+    ).all(conversationId) as ContextAttachmentRow[];
+    return Promise.resolve(rows.map(rowToContextAttachment));
+  }
+
+  replaceConversationContextAttachments(conversationId: string, attachments: ContextAttachmentInput[]): Promise<ContextAttachment[]> {
+    this.db.prepare('DELETE FROM conversation_context_attachments WHERE conversation_id = ?').run(conversationId);
+    const createdAt = Date.now();
+    for (const attachment of attachments) {
+      this.db.prepare(
+        `INSERT INTO conversation_context_attachments (
+          id, conversation_id, kind, label, path, resource_id, source_conversation_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        randomUUID(),
+        conversationId,
+        attachment.kind,
+        attachment.label,
+        attachment.path ?? null,
+        attachment.resource_id ?? null,
+        attachment.source_conversation_id ?? null,
+        createdAt,
+      );
+    }
+    this.db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(createdAt, conversationId);
+    return this.listConversationContextAttachments(conversationId);
+  }
+
+  listContextResources(sessionId: string, branchId: string): Promise<ContextResource[]> {
+    const rows = this.db.prepare(
+      'SELECT * FROM context_resources WHERE session_id = ? AND branch_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC',
+    ).all(sessionId, branchId) as ContextResourceRow[];
+    return Promise.resolve(rows.map(rowToContextResource));
+  }
+
+  upsertContextResource(input: ContextResourceInput): Promise<ContextResource> {
+    const existing = this.db.prepare(
+      `SELECT * FROM context_resources
+       WHERE session_id = ? AND branch_id = ? AND kind = ? AND (
+         (? IS NULL AND source_conversation_id IS NULL) OR source_conversation_id = ?
+       )
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+    ).get(
+      input.session_id,
+      input.branch_id,
+      input.kind,
+      input.source_conversation_id ?? null,
+      input.source_conversation_id ?? null,
+    ) as ContextResourceRow | undefined;
+    const timestamp = Date.now();
+
+    if (existing) {
+      this.db.prepare(
+        `UPDATE context_resources
+         SET title = ?, content = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(input.title, input.content, timestamp, existing.id);
+      return Promise.resolve({
+        id: existing.id,
+        session_id: existing.session_id,
+        branch_id: existing.branch_id,
+        kind: existing.kind as ContextResourceKind,
+        title: input.title,
+        content: input.content,
+        created_at: Number(existing.created_at),
+        updated_at: timestamp,
+        ...(existing.source_conversation_id ? { source_conversation_id: existing.source_conversation_id } : {}),
+      });
+    }
+
+    const id = randomUUID();
+    this.db.prepare(
+      `INSERT INTO context_resources (
+        id, session_id, branch_id, kind, title, content, source_conversation_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      input.session_id,
+      input.branch_id,
+      input.kind,
+      input.title,
+      input.content,
+      input.source_conversation_id ?? null,
+      timestamp,
+      timestamp,
+    );
+
+    return Promise.resolve({
+      id,
+      session_id: input.session_id,
+      branch_id: input.branch_id,
+      kind: input.kind,
+      title: input.title,
+      content: input.content,
+      created_at: timestamp,
+      updated_at: timestamp,
+      ...(input.source_conversation_id ? { source_conversation_id: input.source_conversation_id } : {}),
+    });
   }
 
   getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
@@ -966,6 +1424,13 @@ export class PostgresAdapter implements DatabaseAdapter {
       [branchId, id, now],
     );
 
+    await this.pool.query(
+      `INSERT INTO conversations (
+        id, session_id, branch_id, title, archived, created_at, updated_at
+      ) VALUES ($1, $2, $3, 'main', FALSE, $4, $5)`,
+      [randomUUID(), id, branchId, now, now],
+    );
+
     return { id, token };
   }
 
@@ -1041,10 +1506,83 @@ export class PostgresAdapter implements DatabaseAdapter {
     return result.rows.map((row) => rowToSessionBranch(normalizeSessionBranchRow(row)));
   }
 
+  async getMainConversation(sessionId: string, branchId: string): Promise<ConversationSummary | null> {
+    await this.initialize();
+    const result = await this.pool.query<ConversationRow>(
+      "SELECT * FROM conversations WHERE session_id = $1 AND branch_id = $2 AND title = 'main' ORDER BY created_at ASC LIMIT 1",
+      [sessionId, branchId],
+    );
+    return result.rows[0] ? rowToConversation(normalizeConversationRow(result.rows[0])) : null;
+  }
+
+  async getConversation(sessionId: string, conversationId: string): Promise<ConversationSummary | null> {
+    await this.initialize();
+    const result = await this.pool.query<ConversationRow>(
+      'SELECT * FROM conversations WHERE session_id = $1 AND id = $2 LIMIT 1',
+      [sessionId, conversationId],
+    );
+    return result.rows[0] ? rowToConversation(normalizeConversationRow(result.rows[0])) : null;
+  }
+
+  async listConversations(sessionId: string, branchId: string): Promise<ConversationSummary[]> {
+    await this.initialize();
+    const result = await this.pool.query<ConversationRow>(
+      'SELECT * FROM conversations WHERE session_id = $1 AND branch_id = $2 ORDER BY updated_at DESC, created_at DESC, id DESC',
+      [sessionId, branchId],
+    );
+    return result.rows.map((row) => rowToConversation(normalizeConversationRow(row)));
+  }
+
+  async createConversation(config: CreateConversationConfig): Promise<ConversationSummary> {
+    await this.initialize();
+    const id = randomUUID();
+    const timestamp = Date.now();
+    const title = config.title?.trim() || 'New chat';
+    await this.pool.query(
+      `INSERT INTO conversations (
+        id, session_id, branch_id, title, archived, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, config.session_id, config.branch_id, title, config.archived ?? false, timestamp, timestamp],
+    );
+    return {
+      id,
+      session_id: config.session_id,
+      branch_id: config.branch_id,
+      title,
+      archived: config.archived ?? false,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+  }
+
+  async updateConversation(config: UpdateConversationConfig): Promise<ConversationSummary | null> {
+    await this.initialize();
+    const existing = await this.getConversation(config.session_id, config.conversation_id);
+    if (!existing) {
+      return null;
+    }
+    const timestamp = Date.now();
+    const title = config.title?.trim() || existing.title;
+    const archived = config.archived ?? existing.archived;
+    await this.pool.query(
+      `UPDATE conversations SET title = $1, archived = $2, updated_at = $3 WHERE id = $4`,
+      [title, archived, timestamp, config.conversation_id],
+    );
+    return {
+      ...existing,
+      title,
+      archived,
+      updated_at: timestamp,
+    };
+  }
+
   async createBranch(config: CreateBranchConfig): Promise<SessionBranch> {
     await this.initialize();
     const id = randomUUID();
     const createdAt = Date.now();
+    const parentConversationId = config.conversation_id
+      ?? (await this.getMainConversation(config.session_id, config.parent_branch_id))?.id
+      ?? null;
     await this.pool.query(
       `INSERT INTO session_branches (
         id, session_id, name, parent_branch_id, forked_from_sequence, created_at
@@ -1052,22 +1590,30 @@ export class PostgresAdapter implements DatabaseAdapter {
       [id, config.session_id, config.name, config.parent_branch_id, config.forked_from_sequence, createdAt],
     );
 
+    const mainConversationId = randomUUID();
     await this.pool.query(
-      `INSERT INTO messages (session_id, branch_id, turn_sequence, role, content, token_count, created_at)
-       SELECT session_id, $1, turn_sequence, role, content, token_count, created_at
-       FROM messages
-       WHERE session_id = $2 AND branch_id = $3 AND turn_sequence IS NOT NULL AND turn_sequence <= $4
-       ORDER BY id ASC`,
-      [id, config.session_id, config.parent_branch_id, config.forked_from_sequence],
+      `INSERT INTO conversations (
+        id, session_id, branch_id, title, archived, created_at, updated_at
+      ) VALUES ($1, $2, $3, 'main', FALSE, $4, $5)`,
+      [mainConversationId, config.session_id, id, createdAt, createdAt],
     );
 
     await this.pool.query(
-      `INSERT INTO replay_events (session_id, branch_id, turn_sequence, type, timestamp, payload)
-       SELECT session_id, $1, turn_sequence, type, timestamp, payload
+      `INSERT INTO messages (session_id, branch_id, conversation_id, turn_sequence, role, content, token_count, created_at)
+       SELECT session_id, $1, $2, turn_sequence, role, content, token_count, created_at
+       FROM messages
+       WHERE session_id = $3 AND branch_id = $4 AND conversation_id = $5 AND turn_sequence IS NOT NULL AND turn_sequence <= $6
+       ORDER BY id ASC`,
+      [id, mainConversationId, config.session_id, config.parent_branch_id, parentConversationId, config.forked_from_sequence],
+    );
+
+    await this.pool.query(
+      `INSERT INTO replay_events (session_id, branch_id, conversation_id, turn_sequence, type, timestamp, payload)
+       SELECT session_id, $1, $2, turn_sequence, type, timestamp, payload
        FROM replay_events
-       WHERE session_id = $2 AND branch_id = $3 AND turn_sequence IS NOT NULL AND turn_sequence <= $4
+       WHERE session_id = $3 AND branch_id = $4 AND conversation_id = $5 AND turn_sequence IS NOT NULL AND turn_sequence <= $6
        ORDER BY timestamp ASC, id ASC`,
-      [id, config.session_id, config.parent_branch_id, config.forked_from_sequence],
+      [id, mainConversationId, config.session_id, config.parent_branch_id, parentConversationId, config.forked_from_sequence],
     );
 
     const snapshotResult = await this.pool.query<WorkspaceSnapshotRow>(
@@ -1134,13 +1680,19 @@ export class PostgresAdapter implements DatabaseAdapter {
     role: MessageRole,
     content: string,
     tokenCount: number,
+    conversationId?: string,
   ): Promise<void> {
     await this.initialize();
+    const resolvedConversationId = conversationId ?? (await this.getMainConversation(sessionId, branchId))?.id;
+    if (!resolvedConversationId) {
+      throw new Error(`Main conversation not found for branch ${branchId}`);
+    }
     await this.pool.query(
-      `INSERT INTO messages (session_id, branch_id, turn_sequence, role, content, token_count, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [sessionId, branchId, turnSequence, role, content, tokenCount, Date.now()],
+      `INSERT INTO messages (session_id, branch_id, conversation_id, turn_sequence, role, content, token_count, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [sessionId, branchId, resolvedConversationId, turnSequence, role, content, tokenCount, Date.now()],
     );
+    await this.pool.query('UPDATE conversations SET updated_at = $1 WHERE id = $2', [Date.now(), resolvedConversationId]);
   }
 
   async addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void> {
@@ -1151,17 +1703,23 @@ export class PostgresAdapter implements DatabaseAdapter {
     await this.addBranchMessage(sessionId, branch.id, null, role, content, tokenCount);
   }
 
-  async getBranchMessages(sessionId: string, branchId: string): Promise<StoredMessage[]> {
+  async getBranchMessages(sessionId: string, branchId: string, conversationId?: string): Promise<StoredMessage[]> {
     await this.initialize();
-    const result = await this.pool.query<MessageRow>(
-      'SELECT * FROM messages WHERE session_id = $1 AND branch_id = $2 ORDER BY id ASC',
-      [sessionId, branchId],
-    );
+    const result = conversationId
+      ? await this.pool.query<MessageRow>(
+          'SELECT * FROM messages WHERE session_id = $1 AND branch_id = $2 AND conversation_id = $3 ORDER BY id ASC',
+          [sessionId, branchId, conversationId],
+        )
+      : await this.pool.query<MessageRow>(
+          'SELECT * FROM messages WHERE session_id = $1 AND branch_id = $2 ORDER BY id ASC',
+          [sessionId, branchId],
+        );
 
     return result.rows.map((row) => ({
       id: Number(row.id),
       session_id: row.session_id,
       branch_id: row.branch_id,
+      conversation_id: row.conversation_id,
       turn_sequence: row.turn_sequence === null ? null : Number(row.turn_sequence),
       role: row.role as MessageRole,
       content: row.content,
@@ -1275,30 +1833,134 @@ export class PostgresAdapter implements DatabaseAdapter {
     type: ReplayEventType,
     timestamp: number,
     payload: unknown,
+    conversationId?: string,
   ): Promise<void> {
     await this.initialize();
+    const resolvedConversationId = conversationId ?? (await this.getMainConversation(sessionId, branchId))?.id;
+    if (!resolvedConversationId) {
+      throw new Error(`Main conversation not found for branch ${branchId}`);
+    }
     await this.pool.query(
-      `INSERT INTO replay_events (session_id, branch_id, turn_sequence, type, timestamp, payload)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [sessionId, branchId, turnSequence, type, timestamp, JSON.stringify(payload)],
+      `INSERT INTO replay_events (session_id, branch_id, conversation_id, turn_sequence, type, timestamp, payload)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [sessionId, branchId, resolvedConversationId, turnSequence, type, timestamp, JSON.stringify(payload)],
     );
   }
 
-  async getBranchReplayEvents(sessionId: string, branchId: string): Promise<StoredReplayEvent[]> {
+  async getBranchReplayEvents(sessionId: string, branchId: string, conversationId?: string): Promise<StoredReplayEvent[]> {
     await this.initialize();
-    const result = await this.pool.query<ReplayEventRow>(
-      'SELECT * FROM replay_events WHERE session_id = $1 AND branch_id = $2 ORDER BY timestamp ASC, id ASC',
-      [sessionId, branchId],
-    );
+    const result = conversationId
+      ? await this.pool.query<ReplayEventRow>(
+          'SELECT * FROM replay_events WHERE session_id = $1 AND branch_id = $2 AND conversation_id = $3 ORDER BY timestamp ASC, id ASC',
+          [sessionId, branchId, conversationId],
+        )
+      : await this.pool.query<ReplayEventRow>(
+          'SELECT * FROM replay_events WHERE session_id = $1 AND branch_id = $2 ORDER BY timestamp ASC, id ASC',
+          [sessionId, branchId],
+        );
     return result.rows.map((row) => ({
       id: Number(row.id),
       session_id: row.session_id,
       branch_id: row.branch_id,
+      conversation_id: row.conversation_id,
       turn_sequence: row.turn_sequence === null ? null : Number(row.turn_sequence),
       type: row.type as ReplayEventType,
       timestamp: Number(row.timestamp),
       payload: JSON.parse(row.payload) as unknown,
     }));
+  }
+
+  async listConversationContextAttachments(conversationId: string): Promise<ContextAttachment[]> {
+    await this.initialize();
+    const result = await this.pool.query<ContextAttachmentRow>(
+      'SELECT * FROM conversation_context_attachments WHERE conversation_id = $1 ORDER BY created_at ASC, id ASC',
+      [conversationId],
+    );
+    return result.rows.map((row) => rowToContextAttachment(normalizeContextAttachmentRow(row)));
+  }
+
+  async replaceConversationContextAttachments(conversationId: string, attachments: ContextAttachmentInput[]): Promise<ContextAttachment[]> {
+    await this.initialize();
+    await this.pool.query('DELETE FROM conversation_context_attachments WHERE conversation_id = $1', [conversationId]);
+    const timestamp = Date.now();
+    for (const attachment of attachments) {
+      await this.pool.query(
+        `INSERT INTO conversation_context_attachments (
+          id, conversation_id, kind, label, path, resource_id, source_conversation_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          randomUUID(),
+          conversationId,
+          attachment.kind,
+          attachment.label,
+          attachment.path ?? null,
+          attachment.resource_id ?? null,
+          attachment.source_conversation_id ?? null,
+          timestamp,
+        ],
+      );
+    }
+    await this.pool.query('UPDATE conversations SET updated_at = $1 WHERE id = $2', [timestamp, conversationId]);
+    return this.listConversationContextAttachments(conversationId);
+  }
+
+  async listContextResources(sessionId: string, branchId: string): Promise<ContextResource[]> {
+    await this.initialize();
+    const result = await this.pool.query<ContextResourceRow>(
+      'SELECT * FROM context_resources WHERE session_id = $1 AND branch_id = $2 ORDER BY updated_at DESC, created_at DESC, id DESC',
+      [sessionId, branchId],
+    );
+    return result.rows.map((row) => rowToContextResource(normalizeContextResourceRow(row)));
+  }
+
+  async upsertContextResource(input: ContextResourceInput): Promise<ContextResource> {
+    await this.initialize();
+    const timestamp = Date.now();
+    const existing = await this.pool.query<ContextResourceRow>(
+      `SELECT * FROM context_resources
+       WHERE session_id = $1 AND branch_id = $2 AND kind = $3 AND (($4::text IS NULL AND source_conversation_id IS NULL) OR source_conversation_id = $4)
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+      [input.session_id, input.branch_id, input.kind, input.source_conversation_id ?? null],
+    );
+
+    if (existing.rows[0]) {
+      const normalized = normalizeContextResourceRow(existing.rows[0]);
+      await this.pool.query(
+        `UPDATE context_resources SET title = $1, content = $2, updated_at = $3 WHERE id = $4`,
+        [input.title, input.content, timestamp, normalized.id],
+      );
+      return {
+        id: normalized.id,
+        session_id: normalized.session_id,
+        branch_id: normalized.branch_id,
+        kind: normalized.kind as ContextResourceKind,
+        title: input.title,
+        content: input.content,
+        created_at: Number(normalized.created_at),
+        updated_at: timestamp,
+        ...(normalized.source_conversation_id ? { source_conversation_id: normalized.source_conversation_id } : {}),
+      };
+    }
+
+    const id = randomUUID();
+    await this.pool.query(
+      `INSERT INTO context_resources (
+        id, session_id, branch_id, kind, title, content, source_conversation_id, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [id, input.session_id, input.branch_id, input.kind, input.title, input.content, input.source_conversation_id ?? null, timestamp, timestamp],
+    );
+    return {
+      id,
+      session_id: input.session_id,
+      branch_id: input.branch_id,
+      kind: input.kind,
+      title: input.title,
+      content: input.content,
+      created_at: timestamp,
+      updated_at: timestamp,
+      ...(input.source_conversation_id ? { source_conversation_id: input.source_conversation_id } : {}),
+    };
   }
 
   async getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {
@@ -1454,9 +2116,52 @@ export class PostgresAdapter implements DatabaseAdapter {
       for (const statement of POSTGRES_SCHEMA_STATEMENTS) {
         await this.pool.query(statement);
       }
+      await this.pool.query('ALTER TABLE messages ADD COLUMN IF NOT EXISTS conversation_id TEXT');
+      await this.pool.query('ALTER TABLE replay_events ADD COLUMN IF NOT EXISTS conversation_id TEXT');
+      await this.backfillPostgresConversations();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to initialize PostgreSQL database schema: ${message}`);
+    }
+  }
+
+  private async backfillPostgresConversations(): Promise<void> {
+    const branchesResult = await this.pool.query<SessionBranchRow>(
+      'SELECT * FROM session_branches ORDER BY created_at ASC, id ASC',
+    );
+    for (const row of branchesResult.rows) {
+      const branch = normalizeSessionBranchRow(row);
+      let conversationResult = await this.pool.query<ConversationRow>(
+        "SELECT * FROM conversations WHERE branch_id = $1 AND title = 'main' ORDER BY created_at ASC LIMIT 1",
+        [branch.id],
+      );
+
+      if (!conversationResult.rows[0]) {
+        const id = randomUUID();
+        await this.pool.query(
+          `INSERT INTO conversations (id, session_id, branch_id, title, archived, created_at, updated_at)
+           VALUES ($1, $2, $3, 'main', FALSE, $4, $5)`,
+          [id, branch.session_id, branch.id, branch.created_at, branch.created_at],
+        );
+        conversationResult = await this.pool.query<ConversationRow>(
+          'SELECT * FROM conversations WHERE id = $1',
+          [id],
+        );
+      }
+
+      const conversation = normalizeConversationRow(conversationResult.rows[0]!);
+      await this.pool.query(
+        `UPDATE messages
+         SET conversation_id = $1
+         WHERE session_id = $2 AND branch_id = $3 AND (conversation_id IS NULL OR conversation_id = '')`,
+        [conversation.id, branch.session_id, branch.id],
+      );
+      await this.pool.query(
+        `UPDATE replay_events
+         SET conversation_id = $1
+         WHERE session_id = $2 AND branch_id = $3 AND (conversation_id IS NULL OR conversation_id = '')`,
+        [conversation.id, branch.session_id, branch.id],
+      );
     }
   }
 }
@@ -1496,6 +2201,30 @@ function normalizeSessionBranchRow(row: SessionBranchRow): SessionBranchRow {
         ? null
         : Number(row.forked_from_sequence),
     created_at: Number(row.created_at),
+  };
+}
+
+function normalizeConversationRow(row: ConversationRow): ConversationRow {
+  return {
+    ...row,
+    archived: typeof row.archived === 'boolean' ? row.archived : Number(row.archived),
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
+  };
+}
+
+function normalizeContextAttachmentRow(row: ContextAttachmentRow): ContextAttachmentRow {
+  return {
+    ...row,
+    created_at: Number(row.created_at),
+  };
+}
+
+function normalizeContextResourceRow(row: ContextResourceRow): ContextResourceRow {
+  return {
+    ...row,
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
   };
 }
 
@@ -1555,6 +2284,45 @@ function rowToSessionBranch(row: SessionBranchRow): SessionBranch {
   }
 
   return branch;
+}
+
+function rowToConversation(row: ConversationRow): ConversationSummary {
+  return {
+    id: row.id,
+    session_id: row.session_id,
+    branch_id: row.branch_id,
+    title: row.title,
+    archived: Boolean(row.archived),
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
+  };
+}
+
+function rowToContextAttachment(row: ContextAttachmentRow): ContextAttachment {
+  return {
+    id: row.id,
+    conversation_id: row.conversation_id,
+    kind: row.kind as ContextAttachmentKind,
+    label: row.label,
+    created_at: Number(row.created_at),
+    ...(row.path ? { path: row.path } : {}),
+    ...(row.resource_id ? { resource_id: row.resource_id } : {}),
+    ...(row.source_conversation_id ? { source_conversation_id: row.source_conversation_id } : {}),
+  };
+}
+
+function rowToContextResource(row: ContextResourceRow): ContextResource {
+  return {
+    id: row.id,
+    session_id: row.session_id,
+    branch_id: row.branch_id,
+    kind: row.kind as ContextResourceKind,
+    title: row.title,
+    content: row.content,
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
+    ...(row.source_conversation_id ? { source_conversation_id: row.source_conversation_id } : {}),
+  };
 }
 
 function rowToWorkspaceSnapshot(row: WorkspaceSnapshotRow): WorkspaceSnapshot {

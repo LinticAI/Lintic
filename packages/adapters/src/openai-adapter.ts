@@ -82,10 +82,13 @@ export class OpenAIAdapter implements AgentAdapter {
   private lastUsage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
   init(config: AgentConfig): Promise<void> {
-    if (!config.api_key) {
+    if (!config.api_key && config.provider !== 'local-openai') {
       return Promise.reject(new AdapterError('OpenAIAdapter: api_key is required', 0, 'missing_api_key'));
     }
-    this.config = config;
+    this.config = {
+      ...config,
+      api_key: config.api_key || (config.provider === 'local-openai' ? 'local-dev' : config.api_key),
+    };
     this.baseUrl = resolveDefaultBaseUrl(config).replace(/\/$/, '');
     return Promise.resolve();
   }
@@ -110,12 +113,13 @@ export class OpenAIAdapter implements AgentAdapter {
       model: this.config.model,
       messages,
       tools: toOpenAITools(TOOLS),
+      tool_choice: 'auto' as const,
       max_tokens: Math.min(context.constraints_remaining.tokens_remaining, MAX_OUTPUT_TOKENS),
     };
 
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+      response = await fetch(buildChatCompletionsUrl(this.baseUrl), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -204,7 +208,18 @@ function resolveDefaultBaseUrl(config: AgentConfig): string {
     return 'https://api.cerebras.ai';
   }
 
+  if (config.provider === 'local-openai') {
+    return 'http://localhost:8080/v1';
+  }
+
   return 'https://api.openai.com';
+}
+
+function buildChatCompletionsUrl(baseUrl: string): string {
+  if (baseUrl.endsWith('/v1')) {
+    return `${baseUrl}/chat/completions`;
+  }
+  return `${baseUrl}/v1/chat/completions`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

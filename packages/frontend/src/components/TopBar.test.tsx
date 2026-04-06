@@ -107,4 +107,13 @@ describe('TopBar', () => {
 
     expect(screen.getByTestId('submit-task')).toHaveTextContent('Submitting...');
   });
+
+  test('allows the header content to wrap on narrower viewports', () => {
+    render(<TopBar {...DEFAULT_PROPS} onViewPrompt={() => {}} onSubmitTask={() => undefined} />);
+
+    const promptButton = screen.getByTestId('view-prompt');
+    expect(promptButton.className).toContain('shrink-0');
+    expect(screen.getByText('Library Backend Service').className).toContain('truncate');
+    expect(screen.getByText('PRD + Implementation').className).toContain('truncate');
+  });
 });

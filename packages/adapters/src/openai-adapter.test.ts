@@ -101,6 +101,17 @@ describe('init', () => {
     );
     vi.unstubAllGlobals();
   });
+
+  test('uses localhost base_url for provider local-openai by default', async () => {
+    const adapter = new OpenAIAdapter();
+    await adapter.init({ provider: 'local-openai', api_key: '', model: 'qwen2.5-coder' });
+    vi.stubGlobal('fetch', mockFetch(makeSuccessResponse()));
+    await adapter.sendMessage('hi', makeContext());
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toBe(
+      'http://localhost:8080/v1/chat/completions',
+    );
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('sendMessage', () => {
@@ -131,14 +142,39 @@ describe('sendMessage', () => {
     vi.unstubAllGlobals();
   });
 
+  test('does not duplicate /v1 when base_url already includes it', async () => {
+    const custom = new OpenAIAdapter();
+    await custom.init({
+      provider: 'openai-compatible',
+      base_url: 'https://api.example.com/v1',
+      api_key: 'sk-test',
+      model: 'gpt-4o',
+    });
+    vi.stubGlobal('fetch', mockFetch(makeSuccessResponse({ content: 'Hi there' })));
+
+    await custom.sendMessage('hello', makeContext());
+
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toBe(
+      'https://api.example.com/v1/chat/completions',
+    );
+    vi.unstubAllGlobals();
+  });
+
   test('respects tokens_remaining as max_tokens in request body', async () => {
     vi.stubGlobal('fetch', mockFetch(makeSuccessResponse()));
 
     await adapter.sendMessage('hello', makeContext(123));
 
     const call = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
-    const body = JSON.parse((call?.[1] as { body: string }).body) as { max_tokens: number };
+    const body = JSON.parse((call?.[1] as { body: string }).body) as {
+      max_tokens: number;
+      tool_choice: string;
+      tools: unknown[];
+    };
     expect(body.max_tokens).toBe(123);
+    expect(body.tool_choice).toBe('auto');
+    expect(Array.isArray(body.tools)).toBe(true);
+    expect(body.tools.length).toBeGreaterThan(0);
     vi.unstubAllGlobals();
   });
 

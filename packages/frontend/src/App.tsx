@@ -378,7 +378,7 @@ export function App() {
     });
   }, [activeBranchId, sessionId, sessionToken, snapshotWorkspace]);
 
-  const handleCreateBranch = useCallback(async (name: string, turnSequence: number) => {
+  const handleCreateBranch = useCallback(async (name: string, turnSequence: number, conversationId?: string) => {
     if (!sessionId || !sessionToken || !activeBranchId) {
       return;
     }
@@ -392,6 +392,7 @@ export function App() {
         branch_id: activeBranchId,
         name,
         forked_from_sequence: turnSequence,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
       }),
     });
     if (!response.ok) {
@@ -651,10 +652,10 @@ export function App() {
         submittingTask={submittingTask}
       />
 
-      <div className="flex-1 flex min-h-0 gap-[5px]">
+      <div className="flex min-h-0 min-w-0 flex-1 gap-[5px]">
         <Sidebar activeSection={activeWorkspaceSection} onSelect={setActiveWorkspaceSection} />
         
-        <div className="flex-1 min-h-0">
+        <div className="min-h-0 min-w-0 flex-1">
           <SplitPane
             left={
               <div className="h-full">
@@ -694,6 +695,7 @@ export function App() {
                 onBranchChange={handleBranchChange}
                 onSaveCheckpoint={handleSaveCheckpoint}
                 onCreateBranch={handleCreateBranch}
+                activeFilePath={activeFilePath}
                 onTurnComplete={(turnSequence) => {
                   void snapshotWorkspace('turn', { turnSequence });
                 }}

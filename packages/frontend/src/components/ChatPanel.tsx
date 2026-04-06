@@ -11,7 +11,13 @@ import {
   AlertCircle,
   Bookmark,
   Check,
-  X
+  X,
+  Plus,
+  RefreshCw,
+  FileText,
+  Clock3,
+  FolderTree,
+  Layers3
 } from 'lucide-react';
 import { ToolActionCard } from './ToolActionCard.js';
 import type { LocalToolAction, LocalToolCall, LocalToolResult } from './ToolActionCard.js';
@@ -36,6 +42,56 @@ export interface ChatConstraints {
   maxTokens: number;
   interactionsRemaining: number;
   maxInteractions: number;
+}
+
+interface ConversationSummary {
+  id: string;
+  branch_id: string;
+  title: string;
+  archived: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+interface ContextAttachment {
+  id: string;
+  conversation_id: string;
+  kind: 'file' | 'repo_map' | 'summary' | 'prior_conversation';
+  label: string;
+  path?: string;
+  resource_id?: string;
+  source_conversation_id?: string;
+  created_at: number;
+}
+
+interface ContextResource {
+  id: string;
+  kind: 'repo_map' | 'summary';
+  title: string;
+  content: string;
+  source_conversation_id?: string;
+  updated_at: number;
+}
+
+interface ContextCandidateFile {
+  path: string;
+  label: string;
+  selected: boolean;
+}
+
+interface ContextCandidateResource {
+  id: string;
+  kind: 'repo_map' | 'summary';
+  title: string;
+  source_conversation_id: string | null;
+  selected: boolean;
+}
+
+interface ContextCandidateConversation {
+  id: string;
+  title: string;
+  updated_at: number;
+  selected: boolean;
 }
 
 /** Minimal agent config shape forwarded to the backend for per-request adapter creation. */
@@ -120,8 +176,9 @@ interface ChatPanelProps {
   activeBranchId?: string | null;
   onBranchChange?: (branchId: string) => void;
   onSaveCheckpoint?: (label: string) => Promise<void> | void;
-  onCreateBranch?: (name: string, turnSequence: number) => Promise<void> | void;
+  onCreateBranch?: (name: string, turnSequence: number, conversationId?: string) => Promise<void> | void;
   onTurnComplete?: (turnSequence: number) => void;
+  activeFilePath?: string | null;
 }
 
 function generateId() {
@@ -252,6 +309,15 @@ function renderMarkdown(content: string): string {
   return marked(content, { renderer }) as string;
 }
 
+function formatConversationTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isSameDay = date.toDateString() === now.toDateString();
+  return isSameDay
+    ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
 export function ChatPanel({
   sessionId,
   constraints,
@@ -274,6 +340,7 @@ export function ChatPanel({
   onSaveCheckpoint,
   onCreateBranch,
   onTurnComplete,
+  activeFilePath,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -283,8 +350,18 @@ export function ChatPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const checkpointInputRef = useRef<HTMLInputElement>(null);
+  const contextPanelRef = useRef<HTMLDivElement>(null);
+  const historyKeyRef = useRef<string | null>(null);
   const [checkpointEditing, setCheckpointEditing] = useState(false);
   const [checkpointName, setCheckpointName] = useState('');
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [contextPanelOpen, setContextPanelOpen] = useState(false);
+  const [contextBusy, setContextBusy] = useState(false);
+  const [contextAttachments, setContextAttachments] = useState<ContextAttachment[]>([]);
+  const [contextFiles, setContextFiles] = useState<ContextCandidateFile[]>([]);
+  const [contextResourceCandidates, setContextResourceCandidates] = useState<ContextCandidateResource[]>([]);
+  const [priorConversationCandidates, setPriorConversationCandidates] = useState<ContextCandidateConversation[]>([]);
 
   const exhausted =
     constraints.interactionsRemaining <= 0 || constraints.tokensRemaining <= 0;
@@ -298,15 +375,29 @@ export function ChatPanel({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  // Load history when sessionId changes.
+  // Load history when the active conversation changes.
   useEffect(() => {
-    setMessages([]);
     if (!sessionId) return;
+    const historyKey = `${sessionId}:${activeBranchId ?? 'main'}:${activeConversationId ?? 'main'}`;
+    if (historyKeyRef.current !== null && historyKeyRef.current !== historyKey) {
+      setMessages([]);
+    }
+    historyKeyRef.current = historyKey;
     const headers: HeadersInit = sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {};
     void (async () => {
       try {
-        const branchQuery = activeBranchId ? `?branch_id=${encodeURIComponent(activeBranchId)}` : '';
-        const res = await fetch(`${apiBase}/api/sessions/${sessionId}/messages${branchQuery}`, { headers });
+        const params = new URLSearchParams();
+        if (activeBranchId) {
+          params.set('branch_id', activeBranchId);
+        }
+        if (activeConversationId) {
+          params.set('conversation_id', activeConversationId);
+        }
+        const query = params.toString();
+        const res = await fetch(
+          `${apiBase}/api/sessions/${sessionId}/messages${query ? `?${query}` : ''}`,
+          { headers },
+        );
         if (!res.ok) return;
         const data = (await res.json()) as {
           messages: Array<{
@@ -316,6 +407,8 @@ export function ChatPanel({
             created_at: string;
             turn_sequence?: number | null;
           }>;
+          conversations?: ConversationSummary[];
+          active_conversation_id?: string | null;
         };
         const loadedMessages = data.messages
           .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -328,11 +421,17 @@ export function ChatPanel({
           }));
 
         setMessages((prev) => mergeMessages(prev, loadedMessages));
+        if (data.conversations) {
+          setConversations(data.conversations);
+        }
+        if (data.active_conversation_id) {
+          setActiveConversationId(data.active_conversation_id);
+        }
       } catch {
         // Ignore load errors.
       }
     })();
-  }, [activeBranchId, sessionId, apiBase, sessionToken]);
+  }, [activeBranchId, activeConversationId, sessionId, apiBase, sessionToken]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -355,10 +454,142 @@ export function ChatPanel({
     };
   }, [checkpointEditing]);
 
+  useEffect(() => {
+    if (!contextPanelOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!contextPanelRef.current?.contains(event.target as Node)) {
+        setContextPanelOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setContextPanelOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextPanelOpen]);
+
+  useEffect(() => {
+    setMessages([]);
+    setConversations([]);
+    setActiveConversationId(null);
+    setContextAttachments([]);
+    setContextFiles([]);
+    setContextResourceCandidates([]);
+    setPriorConversationCandidates([]);
+
+    if (!sessionId || !activeBranchId) {
+      return;
+    }
+
+    const headers: HeadersInit = sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {};
+    void (async () => {
+      try {
+        const res = await fetch(
+          `${apiBase}/api/sessions/${sessionId}/conversations?branch_id=${encodeURIComponent(activeBranchId)}`,
+          { headers },
+        );
+        if (!res.ok) {
+          return;
+        }
+        const data = (await res.json()) as {
+          conversations: ConversationSummary[];
+          active_conversation_id: string | null;
+        };
+        setConversations(data.conversations);
+        setActiveConversationId(data.active_conversation_id);
+      } catch {
+        // Ignore load errors.
+      }
+    })();
+  }, [activeBranchId, apiBase, sessionId, sessionToken]);
+
   const stopAgent = useCallback(() => {
     onStopTools?.();
     abortRef.current?.abort();
   }, [onStopTools]);
+
+  const loadContextState = useCallback(async (conversationId: string) => {
+    if (!sessionId || !activeBranchId) {
+      return;
+    }
+    const headers: HeadersInit = sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {};
+    const params = new URLSearchParams({
+      branch_id: activeBranchId,
+      conversation_id: conversationId,
+    });
+    const res = await fetch(`${apiBase}/api/sessions/${sessionId}/context?${params.toString()}`, { headers });
+    if (!res.ok) {
+      throw new Error(`Failed to load context (${res.status})`);
+    }
+    const data = (await res.json()) as {
+      conversations: ConversationSummary[];
+      attachments: ContextAttachment[];
+      resources: ContextResource[];
+      available: {
+        files: ContextCandidateFile[];
+        resources: ContextCandidateResource[];
+        prior_conversations: ContextCandidateConversation[];
+      };
+    };
+    setConversations(data.conversations);
+    setContextAttachments(data.attachments);
+    setContextFiles(data.available.files);
+    setContextResourceCandidates(data.available.resources);
+    setPriorConversationCandidates(data.available.prior_conversations);
+  }, [activeBranchId, apiBase, sessionId, sessionToken]);
+
+  useEffect(() => {
+    if (!activeConversationId) {
+      return;
+    }
+    void loadContextState(activeConversationId).catch(() => {
+      // Ignore sidebar context load errors.
+    });
+  }, [activeConversationId, loadContextState]);
+
+  const persistAttachments = useCallback(async (
+    nextAttachments: Array<{
+      kind: ContextAttachment['kind'];
+      label: string;
+      path?: string;
+      resource_id?: string;
+      source_conversation_id?: string;
+    }>,
+  ) => {
+    if (!sessionId || !activeConversationId) {
+      return;
+    }
+    setContextBusy(true);
+    try {
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      };
+      const res = await fetch(`${apiBase}/api/sessions/${sessionId}/conversations/${activeConversationId}/context`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ attachments: nextAttachments }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to save context (${res.status})`);
+      }
+      await loadContextState(activeConversationId);
+    } finally {
+      setContextBusy(false);
+    }
+  }, [activeConversationId, apiBase, loadContextState, sessionId, sessionToken]);
 
   const handleStartCheckpointEdit = useCallback(() => {
     setCheckpointName('');
@@ -379,6 +610,168 @@ export function ChatPanel({
     setCheckpointEditing(false);
     setCheckpointName('');
   }, [checkpointName, onSaveCheckpoint]);
+
+  const handleCreateConversation = useCallback(async () => {
+    if (!sessionId || !activeBranchId) {
+      return;
+    }
+    setContextBusy(true);
+    try {
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      };
+      const res = await fetch(`${apiBase}/api/sessions/${sessionId}/conversations`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          branch_id: activeBranchId,
+          ...(activeConversationId ? { source_conversation_id: activeConversationId } : {}),
+          ...(activeFilePath ? { active_path: activeFilePath } : {}),
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to create conversation (${res.status})`);
+      }
+      const data = (await res.json()) as {
+        conversations: ConversationSummary[];
+        active_conversation_id: string;
+      };
+      setConversations(data.conversations);
+      setActiveConversationId(data.active_conversation_id);
+      setMessages([]);
+      setInput('');
+      setContextPanelOpen(false);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create conversation');
+    } finally {
+      setContextBusy(false);
+    }
+  }, [activeBranchId, activeConversationId, activeFilePath, apiBase, sessionId, sessionToken]);
+
+  const handleToggleFileContext = useCallback(async (candidate: ContextCandidateFile) => {
+    const exists = contextAttachments.some((attachment) => attachment.kind === 'file' && attachment.path === candidate.path);
+    const nextAttachments = exists
+      ? contextAttachments.filter((attachment) => !(attachment.kind === 'file' && attachment.path === candidate.path))
+      : [...contextAttachments, {
+          id: generateId(),
+          conversation_id: activeConversationId ?? '',
+          kind: 'file' as const,
+          label: candidate.label,
+          path: candidate.path,
+          created_at: Date.now(),
+        }];
+    await persistAttachments(nextAttachments.map((attachment) => ({
+      kind: attachment.kind,
+      label: attachment.label,
+      ...(attachment.path ? { path: attachment.path } : {}),
+      ...(attachment.resource_id ? { resource_id: attachment.resource_id } : {}),
+      ...(attachment.source_conversation_id ? { source_conversation_id: attachment.source_conversation_id } : {}),
+    })));
+  }, [activeConversationId, contextAttachments, persistAttachments]);
+
+  const handleToggleResourceContext = useCallback(async (candidate: ContextCandidateResource) => {
+    const exists = contextAttachments.some((attachment) => attachment.resource_id === candidate.id);
+    const nextAttachments = exists
+      ? contextAttachments.filter((attachment) => attachment.resource_id !== candidate.id)
+      : [...contextAttachments, {
+          id: generateId(),
+          conversation_id: activeConversationId ?? '',
+          kind: candidate.kind,
+          label: candidate.title,
+          resource_id: candidate.id,
+          created_at: Date.now(),
+        }];
+    await persistAttachments(nextAttachments.map((attachment) => ({
+      kind: attachment.kind,
+      label: attachment.label,
+      ...(attachment.path ? { path: attachment.path } : {}),
+      ...(attachment.resource_id ? { resource_id: attachment.resource_id } : {}),
+      ...(attachment.source_conversation_id ? { source_conversation_id: attachment.source_conversation_id } : {}),
+    })));
+  }, [activeConversationId, contextAttachments, persistAttachments]);
+
+  const handleTogglePriorConversation = useCallback(async (candidate: ContextCandidateConversation) => {
+    const exists = contextAttachments.some((attachment) => (
+      attachment.kind === 'prior_conversation' && attachment.source_conversation_id === candidate.id
+    ));
+    const nextAttachments = exists
+      ? contextAttachments.filter((attachment) => !(
+          attachment.kind === 'prior_conversation' && attachment.source_conversation_id === candidate.id
+        ))
+      : [...contextAttachments, {
+          id: generateId(),
+          conversation_id: activeConversationId ?? '',
+          kind: 'prior_conversation' as const,
+          label: candidate.title,
+          source_conversation_id: candidate.id,
+          created_at: Date.now(),
+        }];
+    await persistAttachments(nextAttachments.map((attachment) => ({
+      kind: attachment.kind,
+      label: attachment.label,
+      ...(attachment.path ? { path: attachment.path } : {}),
+      ...(attachment.resource_id ? { resource_id: attachment.resource_id } : {}),
+      ...(attachment.source_conversation_id ? { source_conversation_id: attachment.source_conversation_id } : {}),
+    })));
+  }, [activeConversationId, contextAttachments, persistAttachments]);
+
+  const handleGenerateRepoMap = useCallback(async () => {
+    if (!sessionId || !activeBranchId) {
+      return;
+    }
+    setContextBusy(true);
+    try {
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      };
+      const res = await fetch(`${apiBase}/api/sessions/${sessionId}/context/repo-map`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ branch_id: activeBranchId }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to generate repo map (${res.status})`);
+      }
+      if (activeConversationId) {
+        await loadContextState(activeConversationId);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate repo map');
+    } finally {
+      setContextBusy(false);
+    }
+  }, [activeBranchId, activeConversationId, apiBase, loadContextState, sessionId, sessionToken]);
+
+  const handleGenerateSummary = useCallback(async () => {
+    if (!sessionId || !activeBranchId || !activeConversationId) {
+      return;
+    }
+    setContextBusy(true);
+    try {
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      };
+      const res = await fetch(`${apiBase}/api/sessions/${sessionId}/context/summary`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          branch_id: activeBranchId,
+          conversation_id: activeConversationId,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to summarize chat (${res.status})`);
+      }
+      await loadContextState(activeConversationId);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to summarize chat');
+    } finally {
+      setContextBusy(false);
+    }
+  }, [activeBranchId, activeConversationId, apiBase, loadContextState, sessionId, sessionToken]);
 
   const sendMessage = useCallback(async (overrideText?: string, overrideMode?: AgentMode) => {
     const text = (overrideText ?? input).trim();
@@ -412,6 +805,7 @@ export function ChatPanel({
           message: text,
           mode: selectedMode,
           ...(activeBranchId ? { branch_id: activeBranchId } : {}),
+          ...(activeConversationId ? { conversation_id: activeConversationId } : {}),
           ...agentConfigBody,
         }),
         signal: ctrl.signal,
@@ -516,6 +910,7 @@ export function ChatPanel({
       abortRef.current = null;
     }
   }, [
+    activeConversationId,
     agentConfig,
     activeBranchId,
     apiBase,
@@ -570,7 +965,7 @@ export function ChatPanel({
   return (
     <div className="flex min-w-0 flex-col h-full overflow-hidden" style={{ background: 'var(--color-bg-chat)' }}>
       {/* Messages */}
-      <div className="relative flex flex-1 flex-col gap-3 overflow-y-auto px-5 pt-4 pb-4">
+      <div className="relative flex min-w-0 min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 pt-4 pb-4">
         {messages.length === 0 && !loading && (
           <div
             className="flex-1 flex items-center justify-center text-xs opacity-40 pt-12"
@@ -631,7 +1026,7 @@ export function ChatPanel({
             }
 
             return (
-              <div key={`group-${groupIdx}`} className="flex flex-col gap-1.5 py-1">
+              <div key={`group-${groupIdx}`} className="flex min-w-0 flex-col gap-1.5 py-1">
                 {allToolActions.length > 0 && (
                   <div className="w-full px-1" data-testid="tool-actions-container">
                     <ToolActionCard action={allToolActions} />
@@ -640,7 +1035,7 @@ export function ChatPanel({
                 {contentBlocks.map((content, i) => (
                   <div
                     key={i}
-                    className="w-full text-[14px] chat-markdown break-words px-2"
+                    className="chat-markdown w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden break-words px-2 text-[14px]"
                     style={{ color: 'var(--color-text-agent-msg)' }}
                     data-testid="agent-message"
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
@@ -654,7 +1049,7 @@ export function ChatPanel({
                         const name = window.prompt('New branch name');
                         const turnSequence = group.messages.at(-1)?.turnSequence;
                         if (name?.trim() && typeof turnSequence === 'number') {
-                          void onCreateBranch(name.trim(), turnSequence);
+                          void onCreateBranch(name.trim(), turnSequence, activeConversationId ?? undefined);
                         }
                       }}
                       className="text-[11px] opacity-60 transition-opacity hover:opacity-100"
@@ -912,38 +1307,254 @@ export function ChatPanel({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center justify-end gap-2 opacity-70" style={{ color: 'var(--color-text-main)' }}>
-          <span className="text-[12px] font-medium tracking-tight">Context</span>
-          <div
-            className="chat-token-indicator"
-            data-testid="token-context-indicator"
-            aria-label={`Context: ${Math.round(tokenUsagePct)}% tokens used`}
-            title={`Context: ${Math.round(tokenUsagePct)}% tokens used`}
+        <div ref={contextPanelRef} className="relative flex shrink-0 items-center justify-end">
+          <button
+            type="button"
+            onClick={() => setContextPanelOpen((current) => !current)}
+            className="flex items-center gap-2 rounded-full px-2 py-1 transition-colors hover:bg-white/5"
+            style={{ color: 'var(--color-text-main)', opacity: 0.82 }}
+            data-testid="context-panel-trigger"
           >
-            <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-              <circle
-                cx="10"
-                cy="10"
-                r={tokenRingRadius}
-                fill="none"
-                stroke="rgba(255,255,255,0.12)"
-                strokeWidth="2.5"
-              />
-              <circle
-                cx="10"
-                cy="10"
-                r={tokenRingRadius}
-                fill="none"
-                stroke={isLowTokens ? 'var(--color-status-error)' : 'rgba(229,229,229,0.72)'}
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeDasharray={tokenRingCircumference}
-                strokeDashoffset={tokenRingOffset}
-                transform="rotate(-90 10 10)"
-                style={{ transition: 'stroke-dashoffset 220ms ease, stroke 220ms ease' }}
-              />
-            </svg>
-          </div>
+            <span className="text-[12px] font-medium tracking-tight">Context</span>
+            <div
+              className="chat-token-indicator"
+              data-testid="token-context-indicator"
+              aria-label={`Context: ${Math.round(tokenUsagePct)}% tokens used`}
+              title={`Context: ${Math.round(tokenUsagePct)}% tokens used`}
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+                <circle
+                  cx="10"
+                  cy="10"
+                  r={tokenRingRadius}
+                  fill="none"
+                  stroke="rgba(255,255,255,0.12)"
+                  strokeWidth="2.5"
+                />
+                <circle
+                  cx="10"
+                  cy="10"
+                  r={tokenRingRadius}
+                  fill="none"
+                  stroke={isLowTokens ? 'var(--color-status-error)' : 'rgba(229,229,229,0.72)'}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeDasharray={tokenRingCircumference}
+                  strokeDashoffset={tokenRingOffset}
+                  transform="rotate(-90 10 10)"
+                  style={{ transition: 'stroke-dashoffset 220ms ease, stroke 220ms ease' }}
+                />
+              </svg>
+            </div>
+            <ChevronDown
+              size={14}
+              style={{
+                color: 'var(--color-text-dim)',
+                transform: contextPanelOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                transition: 'transform 160ms ease',
+              }}
+            />
+          </button>
+
+          {contextPanelOpen ? (
+            <div
+              className="absolute bottom-[calc(100%+12px)] right-0 z-30 flex w-[320px] max-w-[min(92vw,320px)] flex-col overflow-hidden rounded-[22px] border border-white/10 p-0 shadow-2xl"
+              style={{ background: 'rgba(19,19,20,0.98)', backdropFilter: 'blur(10px)' }}
+              data-testid="context-panel"
+            >
+              <div className="border-b border-white/8 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[12px] font-semibold" style={{ color: 'var(--color-text-main)' }}>
+                      Context tools
+                    </div>
+                    <div className="text-[11px] opacity-60" style={{ color: 'var(--color-text-dim)' }}>
+                      {Math.round(tokenUsagePct)}% of the window is in use
+                    </div>
+                  </div>
+                  <div className="text-[11px] opacity-60" style={{ color: 'var(--color-text-dim)' }}>
+                    {activeConversationId ? conversations.find((conversation) => conversation.id === activeConversationId)?.title ?? 'New chat' : 'Loading'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="max-h-[68vh] overflow-y-auto px-4 py-3">
+                <div className="mb-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleCreateConversation()}
+                    disabled={contextBusy || loading}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white/6 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10 disabled:opacity-40"
+                    style={{ color: 'var(--color-text-main)' }}
+                    data-testid="new-chat-button"
+                  >
+                    <Plus size={12} />
+                    New chat
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleCreateConversation()}
+                    disabled={contextBusy || loading}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white/6 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10 disabled:opacity-40"
+                    style={{ color: 'var(--color-text-main)' }}
+                    data-testid="clear-chat-button"
+                  >
+                    <X size={12} />
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleGenerateRepoMap()}
+                    disabled={contextBusy}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white/6 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10 disabled:opacity-40"
+                    style={{ color: 'var(--color-text-main)' }}
+                    data-testid="generate-repo-map-button"
+                  >
+                    <FolderTree size={12} />
+                    Refresh repo map
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleGenerateSummary()}
+                    disabled={contextBusy || !activeConversationId}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white/6 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10 disabled:opacity-40"
+                    style={{ color: 'var(--color-text-main)' }}
+                    data-testid="generate-summary-button"
+                  >
+                    <RefreshCw size={12} className={contextBusy ? 'animate-spin' : ''} />
+                    Summarize chat
+                  </button>
+                </div>
+
+                <div className="mb-4">
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--color-text-dim)' }}>
+                    <Clock3 size={11} />
+                    Conversation history
+                  </div>
+                  <div className="space-y-1">
+                    {conversations.map((conversation) => {
+                      const active = conversation.id === activeConversationId;
+                      return (
+                        <button
+                          key={conversation.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveConversationId(conversation.id);
+                            setContextPanelOpen(false);
+                          }}
+                          className="flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left transition hover:bg-white/6"
+                          style={{
+                            background: active ? 'rgba(255,255,255,0.07)' : 'transparent',
+                            color: 'var(--color-text-main)',
+                          }}
+                          data-testid={`conversation-item-${conversation.id}`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-[12px] font-medium">{conversation.title}</span>
+                            <span className="block truncate text-[11px] opacity-55">
+                              {formatConversationTimestamp(conversation.updated_at)}
+                            </span>
+                          </span>
+                          {active ? <Check size={13} /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--color-text-dim)' }}>
+                    <FileText size={11} />
+                    File context
+                  </div>
+                  <div className="space-y-1">
+                    {contextFiles.length > 0 ? contextFiles.map((candidate) => (
+                      <button
+                        key={candidate.path}
+                        type="button"
+                        onClick={() => void handleToggleFileContext(candidate)}
+                        disabled={contextBusy}
+                        className="flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left transition hover:bg-white/6 disabled:opacity-40"
+                        style={{ color: 'var(--color-text-main)' }}
+                        data-testid={`context-file-${candidate.path}`}
+                      >
+                        <span className="min-w-0 truncate text-[12px]">{candidate.label}</span>
+                        {candidate.selected ? <Check size={13} /> : null}
+                      </button>
+                    )) : (
+                      <div className="rounded-2xl px-3 py-2 text-[12px] opacity-55" style={{ color: 'var(--color-text-dim)' }}>
+                        Open a file to make it available here.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--color-text-dim)' }}>
+                    <Layers3 size={11} />
+                    Saved summaries
+                  </div>
+                  <div className="space-y-1">
+                    {contextResourceCandidates.length > 0 ? contextResourceCandidates.map((candidate) => (
+                      <button
+                        key={candidate.id}
+                        type="button"
+                        onClick={() => void handleToggleResourceContext(candidate)}
+                        disabled={contextBusy}
+                        className="flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left transition hover:bg-white/6 disabled:opacity-40"
+                        style={{ color: 'var(--color-text-main)' }}
+                        data-testid={`context-resource-${candidate.id}`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-[12px]">{candidate.title}</span>
+                          <span className="block truncate text-[11px] opacity-55">
+                            {candidate.kind === 'repo_map' ? 'Repo map' : 'Summary'}
+                          </span>
+                        </span>
+                        {candidate.selected ? <Check size={13} /> : null}
+                      </button>
+                    )) : (
+                      <div className="rounded-2xl px-3 py-2 text-[12px] opacity-55" style={{ color: 'var(--color-text-dim)' }}>
+                        Generate a repo map or summary to reuse it later.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'var(--color-text-dim)' }}>
+                    <MessageSquare size={11} />
+                    Prior chat snapshots
+                  </div>
+                  <div className="space-y-1">
+                    {priorConversationCandidates.length > 0 ? priorConversationCandidates.map((candidate) => (
+                      <button
+                        key={candidate.id}
+                        type="button"
+                        onClick={() => void handleTogglePriorConversation(candidate)}
+                        disabled={contextBusy}
+                        className="flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left transition hover:bg-white/6 disabled:opacity-40"
+                        style={{ color: 'var(--color-text-main)' }}
+                        data-testid={`context-prior-conversation-${candidate.id}`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-[12px]">{candidate.title}</span>
+                          <span className="block truncate text-[11px] opacity-55">
+                            {formatConversationTimestamp(candidate.updated_at)}
+                          </span>
+                        </span>
+                        {candidate.selected ? <Check size={13} /> : null}
+                      </button>
+                    )) : (
+                      <div className="rounded-2xl px-3 py-2 text-[12px] opacity-55" style={{ color: 'var(--color-text-dim)' }}>
+                        Earlier chats in this branch will show up here.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>    </div>
   );

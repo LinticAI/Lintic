@@ -16,13 +16,13 @@ export interface ConstraintsRemaining {
 
 // ─── Agent Configuration ─────────────────────────────────────────────────────
 
-// 'groq' and 'cerebras' use the openai-compatible adapter internally;
+// 'groq', 'cerebras', and 'local-openai' use the openai-compatible adapter internally;
 // named explicitly so the backend can auto-set their default base URLs.
-export type AgentProvider = 'openai-compatible' | 'anthropic-native' | 'groq' | 'cerebras';
+export type AgentProvider = 'openai-compatible' | 'anthropic-native' | 'groq' | 'cerebras' | 'local-openai';
 
 export interface AgentConfig {
   provider: AgentProvider;
-  base_url?: string; // optional for anthropic-native, groq, and cerebras (known defaults)
+  base_url?: string; // optional for anthropic-native, groq, cerebras, and local-openai (known defaults)
   api_key: string;
   model: string;
 }
@@ -148,6 +148,43 @@ export interface SessionBranch {
   parent_branch_id?: string;
   forked_from_sequence?: number;
   created_at: number;
+}
+
+export interface ConversationSummary {
+  id: string;
+  session_id: string;
+  branch_id: string;
+  title: string;
+  archived: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export type ContextAttachmentKind = 'file' | 'repo_map' | 'summary' | 'prior_conversation';
+
+export interface ContextAttachment {
+  id: string;
+  conversation_id: string;
+  kind: ContextAttachmentKind;
+  label: string;
+  path?: string;
+  resource_id?: string;
+  source_conversation_id?: string;
+  created_at: number;
+}
+
+export type ContextResourceKind = 'repo_map' | 'summary';
+
+export interface ContextResource {
+  id: string;
+  session_id: string;
+  branch_id: string;
+  kind: ContextResourceKind;
+  title: string;
+  content: string;
+  created_at: number;
+  updated_at: number;
+  source_conversation_id?: string;
 }
 
 export type WorkspaceSection = 'code' | 'database' | 'git';

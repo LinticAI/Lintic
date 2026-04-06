@@ -33,12 +33,14 @@ function truncate(text: string): { text: string; truncated: boolean } {
 function DiffPreview({ content }: { content: string }) {
   const lines = content.split('\n');
   return (
-    <div data-testid="tool-action-diff" className="font-mono text-[12px] leading-relaxed">
-      {lines.map((line, i) => (
-        <div key={i} className="text-[var(--color-status-diff-add)] opacity-90">
-          {'+ '}{line}
-        </div>
-      ))}
+    <div data-testid="tool-action-diff" className="max-w-full overflow-x-auto">
+      <div className="min-w-fit font-mono text-[12px] leading-relaxed">
+        {lines.map((line, i) => (
+          <div key={i} className="whitespace-pre text-[var(--color-status-diff-add)] opacity-90">
+            {'+ '}{line}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -48,7 +50,7 @@ function CommandOutput({ output }: { output: string }) {
   return (
     <pre
       data-testid="tool-action-result"
-      className="font-mono text-[12px] text-[var(--color-text-main)] opacity-80 whitespace-pre-wrap break-all"
+      className="max-w-full overflow-x-auto font-mono text-[12px] text-[var(--color-text-main)] opacity-80 whitespace-pre"
     >
       {text}
       {truncated && <span className="opacity-40">{'\n'}…(truncated)</span>}
@@ -142,7 +144,7 @@ function SingleToolCard({ call, result }: { call: LocalToolCall; result: LocalTo
                     <span className="text-[9px] font-bold tracking-widest text-white/10 px-0.5 uppercase">
                       {k}
                     </span>
-                    <div className="font-mono text-[11px] break-all text-white/50 leading-relaxed overflow-hidden px-1">
+                    <div className="max-w-full overflow-x-auto px-1 font-mono text-[11px] text-white/50 leading-relaxed whitespace-pre">
                       {typeof v === 'string' ? v : JSON.stringify(v, null, 2)}
                     </div>
                   </div>

@@ -25,6 +25,9 @@ import type {
   SnapshotFile,
   MockPgPoolExport,
   WorkspaceSection,
+  ConversationSummary,
+  ContextAttachment,
+  ContextResource,
 } from '@lintic/core';
 import { createApp } from './app.js';
 
@@ -41,9 +44,12 @@ const BASE_CONSTRAINT: Constraint = {
 class FakeDb implements DatabaseAdapter {
   sessions = new Map<string, Session & { token: string }>();
   branches = new Map<string, SessionBranch[]>();
+  conversations = new Map<string, ConversationSummary[]>();
   messageStore = new Map<string, StoredMessage[]>();
   replayStore = new Map<string, StoredReplayEvent[]>();
   workspaceSnapshots = new Map<string, WorkspaceSnapshot[]>();
+  contextAttachmentStore = new Map<string, ContextAttachment[]>();
+  contextResourceStore = new Map<string, ContextResource[]>();
   assessmentLinks = new Map<string, AssessmentLinkRecord>();
   usedAssessmentLinks = new Map<string, string>();
   turnSequences = new Map<string, number>();
@@ -70,6 +76,29 @@ class FakeDb implements DatabaseAdapter {
     return branch;
   }
 
+  private getOrCreateMainConversation(sessionId: string, branchId: string): ConversationSummary {
+    const existing = this.conversations.get(sessionId)?.find((conversation) => (
+      conversation.branch_id === branchId && conversation.title === 'main'
+    ));
+    if (existing) {
+      return existing;
+    }
+
+    const conversation: ConversationSummary = {
+      id: `${branchId}-main-conversation`,
+      session_id: sessionId,
+      branch_id: branchId,
+      title: 'main',
+      archived: false,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    };
+    const conversations = this.conversations.get(sessionId) ?? [];
+    this.conversations.set(sessionId, [...conversations, conversation]);
+    this.contextAttachmentStore.set(conversation.id, []);
+    return conversation;
+  }
+
   private getSnapshotKey(sessionId: string, branchId: string): string {
     return `${sessionId}:${branchId}`;
   }
@@ -90,6 +119,7 @@ class FakeDb implements DatabaseAdapter {
     };
     this.sessions.set(id, session);
     const mainBranch = this.getOrCreateMainBranch(id);
+    this.getOrCreateMainConversation(id, mainBranch.id);
     this.messageStore.set(this.branchKey(id, mainBranch.id), []);
     this.replayStore.set(this.branchKey(id, mainBranch.id), []);
     this.workspaceSnapshots.set(this.getSnapshotKey(id, mainBranch.id), []);
@@ -131,11 +161,71 @@ class FakeDb implements DatabaseAdapter {
     return Promise.resolve(this.branches.get(sessionId) ?? [this.getOrCreateMainBranch(sessionId)]);
   }
 
+  getMainConversation(sessionId: string, branchId: string): Promise<ConversationSummary | null> {
+    return Promise.resolve(this.getOrCreateMainConversation(sessionId, branchId));
+  }
+
+  getConversation(sessionId: string, conversationId: string): Promise<ConversationSummary | null> {
+    return Promise.resolve(this.conversations.get(sessionId)?.find((conversation) => conversation.id === conversationId) ?? null);
+  }
+
+  listConversations(sessionId: string, branchId: string): Promise<ConversationSummary[]> {
+    return Promise.resolve(
+      (this.conversations.get(sessionId) ?? [])
+        .filter((conversation) => conversation.branch_id === branchId)
+        .sort((a, b) => b.updated_at - a.updated_at),
+    );
+  }
+
+  createConversation(config: {
+    session_id: string;
+    branch_id: string;
+    title?: string;
+    archived?: boolean;
+  }): Promise<ConversationSummary> {
+    const conversation: ConversationSummary = {
+      id: `${config.branch_id}-conversation-${(this.conversations.get(config.session_id)?.length ?? 0) + 1}`,
+      session_id: config.session_id,
+      branch_id: config.branch_id,
+      title: config.title ?? 'New chat',
+      archived: config.archived ?? false,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    };
+    const conversations = this.conversations.get(config.session_id) ?? [];
+    this.conversations.set(config.session_id, [...conversations, conversation]);
+    this.contextAttachmentStore.set(conversation.id, []);
+    return Promise.resolve(conversation);
+  }
+
+  updateConversation(config: {
+    session_id: string;
+    conversation_id: string;
+    title?: string;
+    archived?: boolean;
+  }): Promise<ConversationSummary | null> {
+    const conversations = this.conversations.get(config.session_id) ?? [];
+    const index = conversations.findIndex((conversation) => conversation.id === config.conversation_id);
+    if (index < 0) {
+      return Promise.resolve(null);
+    }
+    const updated: ConversationSummary = {
+      ...conversations[index]!,
+      ...(config.title !== undefined ? { title: config.title } : {}),
+      ...(config.archived !== undefined ? { archived: config.archived } : {}),
+      updated_at: Date.now(),
+    };
+    conversations[index] = updated;
+    this.conversations.set(config.session_id, [...conversations]);
+    return Promise.resolve(updated);
+  }
+
   createBranch(config: {
     session_id: string;
     name: string;
     parent_branch_id: string;
     forked_from_sequence: number;
+    conversation_id?: string;
   }): Promise<SessionBranch> {
     const branch: SessionBranch = {
       id: `${config.name}-${(this.branches.get(config.session_id)?.length ?? 0) + 1}`,
@@ -147,21 +237,33 @@ class FakeDb implements DatabaseAdapter {
     };
     const branches = this.branches.get(config.session_id) ?? [this.getOrCreateMainBranch(config.session_id)];
     this.branches.set(config.session_id, [...branches, branch]);
+    const sourceConversation = config.conversation_id
+      ? this.conversations.get(config.session_id)?.find((conversation) => conversation.id === config.conversation_id)
+      : this.getOrCreateMainConversation(config.session_id, config.parent_branch_id);
+    const mainConversation = this.getOrCreateMainConversation(config.session_id, branch.id);
 
     const parentMessages = this.messageStore.get(this.branchKey(config.session_id, config.parent_branch_id)) ?? [];
     this.messageStore.set(
       this.branchKey(config.session_id, branch.id),
       parentMessages
-        .filter((message) => message.turn_sequence !== null && (message.turn_sequence ?? 0) <= config.forked_from_sequence)
-        .map((message) => ({ ...message, branch_id: branch.id })),
+        .filter((message) => (
+          message.turn_sequence !== null
+          && (message.turn_sequence ?? 0) <= config.forked_from_sequence
+          && (!sourceConversation || message.conversation_id === sourceConversation.id)
+        ))
+        .map((message) => ({ ...message, branch_id: branch.id, conversation_id: mainConversation.id })),
     );
 
     const parentEvents = this.replayStore.get(this.branchKey(config.session_id, config.parent_branch_id)) ?? [];
     this.replayStore.set(
       this.branchKey(config.session_id, branch.id),
       parentEvents
-        .filter((event) => event.turn_sequence !== null && (event.turn_sequence ?? 0) <= config.forked_from_sequence)
-        .map((event) => ({ ...event, branch_id: branch.id })),
+        .filter((event) => (
+          event.turn_sequence !== null
+          && (event.turn_sequence ?? 0) <= config.forked_from_sequence
+          && (!sourceConversation || event.conversation_id === sourceConversation.id)
+        ))
+        .map((event) => ({ ...event, branch_id: branch.id, conversation_id: mainConversation.id })),
     );
 
     const parentSnapshots = this.workspaceSnapshots.get(this.getSnapshotKey(config.session_id, config.parent_branch_id)) ?? [];
@@ -194,13 +296,16 @@ class FakeDb implements DatabaseAdapter {
     role: MessageRole,
     content: string,
     tokenCount: number,
+    conversationId?: string,
   ): Promise<void> {
     const key = this.branchKey(sessionId, branchId);
     const msgs = this.messageStore.get(key) ?? [];
+    const resolvedConversationId = conversationId ?? this.getOrCreateMainConversation(sessionId, branchId).id;
     msgs.push({
       id: this.nextMsgId++,
       session_id: sessionId,
       branch_id: branchId,
+      conversation_id: resolvedConversationId,
       turn_sequence: turnSequence,
       role,
       content,
@@ -208,6 +313,12 @@ class FakeDb implements DatabaseAdapter {
       created_at: Date.now(),
     });
     this.messageStore.set(key, msgs);
+    const conversations = this.conversations.get(sessionId) ?? [];
+    const index = conversations.findIndex((conversation) => conversation.id === resolvedConversationId);
+    if (index >= 0) {
+      conversations[index] = { ...conversations[index]!, updated_at: Date.now() };
+      this.conversations.set(sessionId, [...conversations]);
+    }
     return Promise.resolve();
   }
 
@@ -215,8 +326,9 @@ class FakeDb implements DatabaseAdapter {
     return this.addBranchMessage(sessionId, 'main', null, role, content, tokenCount);
   }
 
-  getBranchMessages(sessionId: string, branchId: string): Promise<StoredMessage[]> {
-    return Promise.resolve(this.messageStore.get(this.branchKey(sessionId, branchId)) ?? []);
+  getBranchMessages(sessionId: string, branchId: string, conversationId?: string): Promise<StoredMessage[]> {
+    const messages = this.messageStore.get(this.branchKey(sessionId, branchId)) ?? [];
+    return Promise.resolve(conversationId ? messages.filter((message) => message.conversation_id === conversationId) : messages);
   }
 
   getMessages(sessionId: string): Promise<StoredMessage[]> {
@@ -273,13 +385,16 @@ class FakeDb implements DatabaseAdapter {
     type: ReplayEventType,
     timestamp: number,
     payload: unknown,
+    conversationId?: string,
   ): Promise<void> {
     const key = this.branchKey(sessionId, branchId);
     const events = this.replayStore.get(key) ?? [];
+    const resolvedConversationId = conversationId ?? this.getOrCreateMainConversation(sessionId, branchId).id;
     events.push({
       id: this.nextReplayId++,
       session_id: sessionId,
       branch_id: branchId,
+      conversation_id: resolvedConversationId,
       turn_sequence: turnSequence,
       type,
       timestamp,
@@ -293,8 +408,77 @@ class FakeDb implements DatabaseAdapter {
     return this.addBranchReplayEvent(sessionId, 'main', null, type, timestamp, payload);
   }
 
-  getBranchReplayEvents(sessionId: string, branchId: string): Promise<StoredReplayEvent[]> {
-    return Promise.resolve(this.replayStore.get(this.branchKey(sessionId, branchId)) ?? []);
+  getBranchReplayEvents(sessionId: string, branchId: string, conversationId?: string): Promise<StoredReplayEvent[]> {
+    const events = this.replayStore.get(this.branchKey(sessionId, branchId)) ?? [];
+    return Promise.resolve(conversationId ? events.filter((event) => event.conversation_id === conversationId) : events);
+  }
+
+  listConversationContextAttachments(conversationId: string): Promise<ContextAttachment[]> {
+    return Promise.resolve(this.contextAttachmentStore.get(conversationId) ?? []);
+  }
+
+  replaceConversationContextAttachments(
+    conversationId: string,
+    attachments: Array<{
+      kind: ContextAttachment['kind'];
+      label: string;
+      path?: string;
+      resource_id?: string;
+      source_conversation_id?: string;
+    }>,
+  ): Promise<ContextAttachment[]> {
+    const next = attachments.map((attachment, index) => ({
+      id: `${conversationId}:attachment:${index + 1}`,
+      conversation_id: conversationId,
+      kind: attachment.kind,
+      label: attachment.label,
+      ...(attachment.path ? { path: attachment.path } : {}),
+      ...(attachment.resource_id ? { resource_id: attachment.resource_id } : {}),
+      ...(attachment.source_conversation_id ? { source_conversation_id: attachment.source_conversation_id } : {}),
+      created_at: Date.now() + index,
+    }));
+    this.contextAttachmentStore.set(conversationId, next);
+    return Promise.resolve(next);
+  }
+
+  listContextResources(sessionId: string, branchId: string): Promise<ContextResource[]> {
+    return Promise.resolve(
+      (this.contextResourceStore.get(`${sessionId}:${branchId}`) ?? []).sort((a, b) => b.updated_at - a.updated_at),
+    );
+  }
+
+  upsertContextResource(input: {
+    session_id: string;
+    branch_id: string;
+    kind: ContextResource['kind'];
+    title: string;
+    content: string;
+    source_conversation_id?: string;
+  }): Promise<ContextResource> {
+    const key = `${input.session_id}:${input.branch_id}`;
+    const resources = this.contextResourceStore.get(key) ?? [];
+    const existingIndex = resources.findIndex((resource) => (
+      resource.kind === input.kind
+      && resource.source_conversation_id === input.source_conversation_id
+    ));
+    const next: ContextResource = {
+      id: existingIndex >= 0 ? resources[existingIndex]!.id : `${key}:${input.kind}:${resources.length + 1}`,
+      session_id: input.session_id,
+      branch_id: input.branch_id,
+      kind: input.kind,
+      title: input.title,
+      content: input.content,
+      created_at: existingIndex >= 0 ? resources[existingIndex]!.created_at : Date.now(),
+      updated_at: Date.now(),
+      ...(input.source_conversation_id ? { source_conversation_id: input.source_conversation_id } : {}),
+    };
+    if (existingIndex >= 0) {
+      resources[existingIndex] = next;
+    } else {
+      resources.push(next);
+    }
+    this.contextResourceStore.set(key, resources);
+    return Promise.resolve(next);
   }
 
   getReplayEvents(sessionId: string): Promise<StoredReplayEvent[]> {

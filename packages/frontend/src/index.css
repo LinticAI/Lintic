@@ -113,6 +113,14 @@
 /* Chat Markdown Styling */
 .chat-markdown {
   line-height: 1.6;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown > * {
+  max-width: 100%;
 }
 
 .chat-markdown p {
@@ -125,16 +133,33 @@
 
 .chat-markdown pre {
   margin: 1em 0;
-  padding: 1.25rem;
+  padding: 0.875rem 1rem;
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: min(24rem, 55vh);
   background-color: #0d1117;
   border-radius: 16px;
+  font-size: 0.8125rem;
+  line-height: 1.55;
   overflow-x: auto;
+  overflow-y: auto;
+  white-space: pre;
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .chat-markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.9em;
+}
+
+.chat-markdown pre code {
+  display: block;
+  min-width: fit-content;
+}
+
+.chat-markdown table,
+.chat-markdown blockquote {
+  max-width: 100%;
 }
 
 .chat-markdown ul, .chat-markdown ol {

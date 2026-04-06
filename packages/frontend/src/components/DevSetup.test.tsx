@@ -96,6 +96,21 @@ describe('DevSetup', () => {
     expect(baseUrlInput.value).toBe('https://api.cerebras.ai');
   });
 
+  test('local server preset points dev sessions at localhost', () => {
+    render(<DevSetup onSessionReady={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId('dev-use-local-server'));
+
+    const providerInput = screen.getByTestId('dev-provider') as HTMLSelectElement;
+    const baseUrlInput = screen.getByTestId('dev-base-url') as HTMLInputElement;
+    const apiKeyInput = screen.getByTestId('dev-api-key') as HTMLInputElement;
+
+    expect(providerInput.value).toBe('local-openai');
+    expect(baseUrlInput.value).toBe('http://localhost:8080/v1');
+    expect(apiKeyInput.value).toBe('local-dev');
+    expect(screen.getByTestId('dev-local-server-hint')).toBeInTheDocument();
+  });
+
   test('includes base_url in agentConfig when provided', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(makeSessionResponse()));
     const onReady = vi.fn();
@@ -122,6 +137,24 @@ describe('DevSetup', () => {
     await waitFor(() => expect(onReady).toHaveBeenCalled());
     const session = (onReady.mock.calls[0] as [DevSession])[0];
     expect(session.agentConfig.base_url).toBeUndefined();
+  });
+
+  test('allows starting a local dev session with the localhost preset', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(makeSessionResponse()));
+    const onReady = vi.fn();
+    render(<DevSetup onSessionReady={onReady} />);
+
+    fireEvent.click(screen.getByTestId('dev-use-local-server'));
+    fireEvent.change(screen.getByTestId('dev-api-key'), { target: { value: '' } });
+    fireEvent.change(screen.getByTestId('dev-model'), { target: { value: 'qwen2.5-coder' } });
+    fireEvent.click(screen.getByTestId('dev-start'));
+
+    await waitFor(() => expect(onReady).toHaveBeenCalled());
+    const session = (onReady.mock.calls[0] as [DevSession])[0];
+    expect(session.agentConfig.provider).toBe('local-openai');
+    expect(session.agentConfig.base_url).toBe('http://localhost:8080/v1');
+    expect(session.agentConfig.api_key).toBe('local-dev');
+    expect(session.agentConfig.model).toBe('qwen2.5-coder');
   });
 
   test('POSTs to /api/sessions with correct body', async () => {

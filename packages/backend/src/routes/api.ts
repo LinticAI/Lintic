@@ -7,11 +7,14 @@ import type {
   AgentRequestMode,
   AssessmentLinkRecord,
   AssessmentLinkStatus,
+  ContextAttachment,
+  ContextResource,
   DatabaseAdapter,
   AgentAdapter,
   Config,
   Message,
   ConstraintsRemaining,
+  ConversationSummary,
   SessionContext,
   ToolCall,
   ToolResult,
@@ -104,13 +107,14 @@ function createRequestHistory(
   storedMessages: StoredMessage[],
   mode: AgentRequestMode,
   planFilePath?: string,
+  contextMessages: Message[] = [],
 ): Message[] {
   const history = buildHistory(storedMessages).filter((message) => message.role !== 'system');
   const promptOptions = planFilePath ? { planFilePath } : {};
   return [{
     role: 'system',
     content: buildSystemPrompt(mode, promptOptions),
-  }, ...history];
+  }, ...contextMessages, ...history];
 }
 
 function generatePlanFilePath(now = new Date()): string {
@@ -287,6 +291,25 @@ async function resolveBranchOrRespond(
   return branch;
 }
 
+async function resolveConversationOrRespond(
+  db: DatabaseAdapter,
+  res: Response,
+  sessionId: string,
+  branchId: string,
+  conversationId?: string,
+): Promise<ConversationSummary | null> {
+  const conversation = conversationId
+    ? await db.getConversation(sessionId, conversationId)
+    : await db.getMainConversation(sessionId, branchId);
+
+  if (!conversation || conversation.branch_id !== branchId) {
+    res.status(404).json({ error: 'Conversation not found' });
+    return null;
+  }
+
+  return conversation;
+}
+
 function parseWorkspaceKind(value: unknown): WorkspaceSnapshotKind | undefined {
   return value === 'draft' || value === 'turn' || value === 'checkpoint' ? value : undefined;
 }
@@ -314,8 +337,9 @@ async function resolveContinuationTurnSequence(
   db: DatabaseAdapter,
   sessionId: string,
   branchId: string,
+  conversationId?: string,
 ): Promise<number | null> {
-  const messages = await db.getBranchMessages(sessionId, branchId);
+  const messages = await db.getBranchMessages(sessionId, branchId, conversationId);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const turnSequence = messages[index]?.turn_sequence;
     if (turnSequence !== null && turnSequence !== undefined) {
@@ -323,6 +347,267 @@ async function resolveContinuationTurnSequence(
     }
   }
   return null;
+}
+
+function titleFromMessage(message: string): string {
+  const normalized = message.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'New chat';
+  }
+  return normalized.length > 48 ? `${normalized.slice(0, 45).trimEnd()}...` : normalized;
+}
+
+function truncateContextContent(content: string, maxChars = 12000): string {
+  if (content.length <= maxChars) {
+    return content;
+  }
+  return `${content.slice(0, maxChars)}\n\n[Truncated for context length]`;
+}
+
+function buildRepoMapContent(filesystem: Array<{ path: string }>, activePath?: string | null): string {
+  const lines = ['# Repository Map', ''];
+  if (activePath) {
+    lines.push(`Active file: ${activePath}`, '');
+  }
+  if (filesystem.length === 0) {
+    lines.push('No workspace snapshot is available yet.');
+    return lines.join('\n');
+  }
+
+  lines.push(`Files captured: ${filesystem.length}`, '');
+  for (const file of [...filesystem].sort((a, b) => a.path.localeCompare(b.path)).slice(0, 200)) {
+    lines.push(`- ${file.path}`);
+  }
+  if (filesystem.length > 200) {
+    lines.push('', `...and ${filesystem.length - 200} more files`);
+  }
+  return lines.join('\n');
+}
+
+function buildConversationSummaryContent(
+  conversation: ConversationSummary,
+  storedMessages: StoredMessage[],
+): string {
+  const history = buildHistory(storedMessages).filter((message) => message.role !== 'system');
+  const userTurns = history.filter((message) => message.role === 'user').slice(0, 6);
+  const assistantTurns = history.filter((message) => message.role === 'assistant').slice(-4);
+  const toolNames = history.flatMap((message) => message.tool_calls?.map((call) => call.name) ?? []);
+
+  const lines = [
+    `# Conversation Summary: ${conversation.title}`,
+    '',
+    `Messages: ${history.length}`,
+    `Updated: ${new Date(conversation.updated_at).toISOString()}`,
+    '',
+  ];
+
+  if (userTurns.length > 0) {
+    lines.push('## User requests');
+    for (const turn of userTurns) {
+      const content = (turn.content ?? '').replace(/\s+/g, ' ').trim();
+      lines.push(`- ${content.length > 180 ? `${content.slice(0, 177).trimEnd()}...` : content}`);
+    }
+    lines.push('');
+  }
+
+  if (assistantTurns.length > 0) {
+    lines.push('## Recent agent responses');
+    for (const turn of assistantTurns) {
+      const content = (turn.content ?? '').replace(/\s+/g, ' ').trim();
+      if (!content) {
+        continue;
+      }
+      lines.push(`- ${content.length > 180 ? `${content.slice(0, 177).trimEnd()}...` : content}`);
+    }
+    lines.push('');
+  }
+
+  if (toolNames.length > 0) {
+    lines.push('## Tools used');
+    for (const tool of [...new Set(toolNames)]) {
+      lines.push(`- ${tool}`);
+    }
+    lines.push('');
+  }
+
+  if (lines.at(-1) === '') {
+    lines.pop();
+  }
+  return lines.join('\n');
+}
+
+async function buildContextMessages(
+  db: DatabaseAdapter,
+  sessionId: string,
+  branchId: string,
+  conversationId: string,
+): Promise<Message[]> {
+  const [attachments, resources, snapshot, conversations] = await Promise.all([
+    db.listConversationContextAttachments(conversationId),
+    db.listContextResources(sessionId, branchId),
+    db.getWorkspaceSnapshot(sessionId, branchId, { kind: 'draft' }),
+    db.listConversations(sessionId, branchId),
+  ]);
+
+  const resourceById = new Map(resources.map((resource) => [resource.id, resource] as const));
+  const conversationById = new Map(conversations.map((conversation) => [conversation.id, conversation] as const));
+  const fileByPath = new Map(
+    (snapshot?.filesystem ?? []).map((file) => [file.path, file] as const),
+  );
+  const contextMessages: Message[] = [];
+
+  for (const attachment of attachments) {
+    if (attachment.kind === 'file' && attachment.path) {
+      const file = fileByPath.get(attachment.path);
+      if (!file) {
+        continue;
+      }
+      contextMessages.push({
+        role: 'system',
+        content: [
+          `Attached file context: ${attachment.label}`,
+          '',
+          `Path: ${attachment.path}`,
+          '',
+          '```',
+          truncateContextContent(file.content, 10000),
+          '```',
+        ].join('\n'),
+      });
+      continue;
+    }
+
+    if ((attachment.kind === 'repo_map' || attachment.kind === 'summary') && attachment.resource_id) {
+      const resource = resourceById.get(attachment.resource_id);
+      if (!resource) {
+        continue;
+      }
+      contextMessages.push({
+        role: 'system',
+        content: [
+          `Attached ${attachment.kind.replace('_', ' ')}: ${attachment.label}`,
+          '',
+          truncateContextContent(resource.content),
+        ].join('\n'),
+      });
+      continue;
+    }
+
+    if (attachment.kind === 'prior_conversation' && attachment.source_conversation_id) {
+      const sourceConversation = conversationById.get(attachment.source_conversation_id);
+      if (!sourceConversation) {
+        continue;
+      }
+      const summaryResource = resources
+        .filter((resource) => (
+          resource.kind === 'summary' && resource.source_conversation_id === sourceConversation.id
+        ))
+        .sort((a, b) => b.updated_at - a.updated_at)[0];
+      const summaryContent = summaryResource
+        ? summaryResource.content
+        : buildConversationSummaryContent(
+            sourceConversation,
+            await db.getBranchMessages(sessionId, branchId, sourceConversation.id),
+          );
+      contextMessages.push({
+        role: 'system',
+        content: [
+          `Attached prior conversation snapshot: ${attachment.label}`,
+          '',
+          truncateContextContent(summaryContent),
+        ].join('\n'),
+      });
+    }
+  }
+
+  return contextMessages;
+}
+
+async function maybeRetitleConversationFromMessage(
+  db: DatabaseAdapter,
+  conversation: ConversationSummary,
+  sessionId: string,
+  branchId: string,
+  message: string,
+): Promise<ConversationSummary> {
+  if (conversation.title !== 'New chat' && conversation.title !== 'main') {
+    return conversation;
+  }
+  const existingMessages = await db.getBranchMessages(sessionId, branchId, conversation.id);
+  const hasUserTurn = existingMessages.some((stored) => stored.role === 'user');
+  if (hasUserTurn) {
+    return conversation;
+  }
+
+  return (await db.updateConversation({
+    session_id: sessionId,
+    conversation_id: conversation.id,
+    title: titleFromMessage(message),
+  })) ?? conversation;
+}
+
+async function buildDefaultConversationAttachments(
+  db: DatabaseAdapter,
+  sessionId: string,
+  branchId: string,
+  sourceConversationId?: string,
+  activePath?: string,
+): Promise<Array<{
+  kind: 'file' | 'repo_map';
+  label: string;
+  path?: string;
+  resource_id?: string;
+}>> {
+  const [resources, snapshot, sourceAttachments] = await Promise.all([
+    db.listContextResources(sessionId, branchId),
+    db.getWorkspaceSnapshot(sessionId, branchId, { kind: 'draft' }),
+    sourceConversationId
+      ? db.listConversationContextAttachments(sourceConversationId)
+      : Promise.resolve([]),
+  ]);
+
+  const nextAttachments: Array<{
+    kind: 'file' | 'repo_map';
+    label: string;
+    path?: string;
+    resource_id?: string;
+  }> = [];
+  const seenFilePaths = new Set<string>();
+  const repoMap = resources
+    .filter((resource) => resource.kind === 'repo_map')
+    .sort((a, b) => b.updated_at - a.updated_at)[0];
+
+  if (repoMap) {
+    nextAttachments.push({
+      kind: 'repo_map',
+      label: repoMap.title,
+      resource_id: repoMap.id,
+    });
+  }
+
+  const resolvedActivePath = activePath ?? snapshot?.active_path;
+  if (resolvedActivePath) {
+    seenFilePaths.add(resolvedActivePath);
+    nextAttachments.push({
+      kind: 'file',
+      label: resolvedActivePath,
+      path: resolvedActivePath,
+    });
+  }
+
+  for (const attachment of sourceAttachments) {
+    if (attachment.kind !== 'file' || !attachment.path || seenFilePaths.has(attachment.path)) {
+      continue;
+    }
+    seenFilePaths.add(attachment.path);
+    nextAttachments.push({
+      kind: 'file',
+      label: attachment.label,
+      path: attachment.path,
+    });
+  }
+
+  return nextAttachments;
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -554,8 +839,19 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     const branches = await db.listBranches(session.id);
     const branch = await db.getMainBranch(session.id);
+    const conversations = branch ? await db.listConversations(session.id, branch.id) : [];
+    const conversation = branch ? await db.getMainConversation(session.id, branch.id) : null;
 
-    res.json({ session, constraints_remaining, agent: buildAgentSummary(config), branch, branches });
+    res.json({
+      session,
+      constraints_remaining,
+      agent: buildAgentSummary(config),
+      branch,
+      branches,
+      conversation,
+      conversations,
+      active_conversation_id: conversation?.id ?? null,
+    });
   }));
 
   router.get('/sessions/:id/branches', requireToken(db), asyncRoute(async (req, res) => {
@@ -589,6 +885,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       name?: unknown;
       branch_id?: unknown;
       forked_from_sequence?: unknown;
+      conversation_id?: unknown;
     };
 
     if (typeof body.name !== 'string' || !body.name.trim()) {
@@ -615,6 +912,16 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     if (!parentBranch) {
       return;
     }
+    const parentConversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      parentBranch.id,
+      typeof body.conversation_id === 'string' ? body.conversation_id : undefined,
+    );
+    if (!parentConversation) {
+      return;
+    }
 
     const branchName = body.name.trim();
     const existingBranches = await db.listBranches(sessionId);
@@ -623,7 +930,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       return;
     }
 
-    const parentMessages = await db.getBranchMessages(sessionId, parentBranch.id);
+    const parentMessages = await db.getBranchMessages(sessionId, parentBranch.id, parentConversation.id);
     const hasCompletedTurn = parentMessages.some((message) => (
       message.turn_sequence === body.forked_from_sequence && message.role === 'assistant'
     ));
@@ -637,12 +944,343 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       name: branchName,
       parent_branch_id: parentBranch.id,
       forked_from_sequence: body.forked_from_sequence,
+      conversation_id: parentConversation.id,
     });
 
     res.status(201).json({
       branch,
       branches: await db.listBranches(sessionId),
     });
+  }));
+
+  router.get('/sessions/:id/conversations', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof req.query['branch_id'] === 'string' ? req.query['branch_id'] : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const activeConversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      branch.id,
+      typeof req.query['conversation_id'] === 'string' ? req.query['conversation_id'] : undefined,
+    );
+    if (!activeConversation) {
+      return;
+    }
+
+    const conversations = await db.listConversations(sessionId, branch.id);
+    res.json({
+      branch,
+      conversations,
+      active_conversation_id: activeConversation.id,
+    });
+  }));
+
+  router.post('/sessions/:id/conversations', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const body = req.body as {
+      branch_id?: unknown;
+      title?: unknown;
+      source_conversation_id?: unknown;
+      active_path?: unknown;
+    };
+
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof body.branch_id === 'string' ? body.branch_id : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const sourceConversation = typeof body.source_conversation_id === 'string'
+      ? await resolveConversationOrRespond(db, res, sessionId, branch.id, body.source_conversation_id)
+      : null;
+    if (typeof body.source_conversation_id === 'string' && !sourceConversation) {
+      return;
+    }
+
+    const conversation = await db.createConversation({
+      session_id: sessionId,
+      branch_id: branch.id,
+      title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'New chat',
+    });
+
+    const defaultAttachments = await buildDefaultConversationAttachments(
+      db,
+      sessionId,
+      branch.id,
+      sourceConversation?.id,
+      typeof body.active_path === 'string' ? body.active_path : undefined,
+    );
+    const attachments = await db.replaceConversationContextAttachments(
+      conversation.id,
+      defaultAttachments.map((attachment) => ({
+        kind: attachment.kind,
+        label: attachment.label,
+        ...(attachment.path ? { path: attachment.path } : {}),
+        ...(attachment.resource_id ? { resource_id: attachment.resource_id } : {}),
+      })),
+    );
+
+    res.status(201).json({
+      branch,
+      conversation,
+      conversations: await db.listConversations(sessionId, branch.id),
+      attachments,
+      active_conversation_id: conversation.id,
+    });
+  }));
+
+  router.patch('/sessions/:id/conversations/:conversationId', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const conversationId = req.params['conversationId'] as string;
+    const body = req.body as { title?: unknown; archived?: unknown };
+
+    const existing = await db.getConversation(sessionId, conversationId);
+    if (!existing) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    if (body.title !== undefined && typeof body.title !== 'string') {
+      res.status(400).json({ error: 'title must be a string when provided' });
+      return;
+    }
+    if (body.archived !== undefined && typeof body.archived !== 'boolean') {
+      res.status(400).json({ error: 'archived must be a boolean when provided' });
+      return;
+    }
+
+    const conversation = await db.updateConversation({
+      session_id: sessionId,
+      conversation_id: conversationId,
+      ...(typeof body.title === 'string' ? { title: body.title.trim() || existing.title } : {}),
+      ...(typeof body.archived === 'boolean' ? { archived: body.archived } : {}),
+    });
+
+    res.json({
+      conversation,
+      conversations: await db.listConversations(sessionId, existing.branch_id),
+    });
+  }));
+
+  router.get('/sessions/:id/context', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof req.query['branch_id'] === 'string' ? req.query['branch_id'] : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const conversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      branch.id,
+      typeof req.query['conversation_id'] === 'string' ? req.query['conversation_id'] : undefined,
+    );
+    if (!conversation) {
+      return;
+    }
+
+    const [attachments, resources, conversations, snapshot] = await Promise.all([
+      db.listConversationContextAttachments(conversation.id),
+      db.listContextResources(sessionId, branch.id),
+      db.listConversations(sessionId, branch.id),
+      db.getWorkspaceSnapshot(sessionId, branch.id, { kind: 'draft' }),
+    ]);
+
+    const selectedResourceIds = new Set(attachments.map((attachment) => attachment.resource_id).filter(Boolean));
+    const selectedConversationIds = new Set(
+      attachments.map((attachment) => attachment.source_conversation_id).filter(Boolean),
+    );
+    const selectedFilePaths = new Set(attachments.map((attachment) => attachment.path).filter(Boolean));
+    const availableFilePaths = new Set<string>();
+    if (snapshot?.active_path) {
+      availableFilePaths.add(snapshot.active_path);
+    }
+    for (const path of selectedFilePaths) {
+      availableFilePaths.add(path as string);
+    }
+
+    res.json({
+      branch,
+      conversation,
+      conversations,
+      attachments,
+      resources,
+      available: {
+        files: [...availableFilePaths].map((path) => ({
+          path,
+          label: path,
+          selected: selectedFilePaths.has(path),
+        })),
+        resources: resources.map((resource) => ({
+          id: resource.id,
+          kind: resource.kind,
+          title: resource.title,
+          source_conversation_id: resource.source_conversation_id ?? null,
+          selected: selectedResourceIds.has(resource.id),
+        })),
+        prior_conversations: conversations
+          .filter((entry) => entry.id !== conversation.id)
+          .map((entry) => ({
+            id: entry.id,
+            title: entry.title,
+            updated_at: entry.updated_at,
+            selected: selectedConversationIds.has(entry.id),
+          })),
+      },
+    });
+  }));
+
+  router.put('/sessions/:id/conversations/:conversationId/context', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const conversationId = req.params['conversationId'] as string;
+    const body = req.body as { attachments?: unknown };
+
+    const conversation = await db.getConversation(sessionId, conversationId);
+    if (!conversation) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+    if (!Array.isArray(body.attachments)) {
+      res.status(400).json({ error: 'attachments must be an array' });
+      return;
+    }
+
+    const normalized = body.attachments.map((entry) => {
+      const candidate = entry as Record<string, unknown>;
+      const kind = candidate['kind'];
+      const label = candidate['label'];
+      if (
+        (kind !== 'file' && kind !== 'repo_map' && kind !== 'summary' && kind !== 'prior_conversation')
+        || typeof label !== 'string'
+      ) {
+        throw new Error('Invalid attachment');
+      }
+
+      return {
+        kind,
+        label,
+        ...(typeof candidate['path'] === 'string' ? { path: candidate['path'] } : {}),
+        ...(typeof candidate['resource_id'] === 'string' ? { resource_id: candidate['resource_id'] } : {}),
+        ...(typeof candidate['source_conversation_id'] === 'string'
+          ? { source_conversation_id: candidate['source_conversation_id'] }
+          : {}),
+      } as const;
+    });
+
+    const attachments = await db.replaceConversationContextAttachments(conversationId, normalized);
+    res.json({ attachments, conversation: await db.getConversation(sessionId, conversationId) });
+  }));
+
+  router.post('/sessions/:id/context/repo-map', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const body = req.body as { branch_id?: unknown };
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof body.branch_id === 'string' ? body.branch_id : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const snapshot = await db.getWorkspaceSnapshot(sessionId, branch.id, { kind: 'draft' });
+    const content = buildRepoMapContent(snapshot?.filesystem ?? [], snapshot?.active_path);
+    const resource = await db.upsertContextResource({
+      session_id: sessionId,
+      branch_id: branch.id,
+      kind: 'repo_map',
+      title: 'Repository Map',
+      content,
+    });
+
+    res.status(201).json({ resource });
+  }));
+
+  router.post('/sessions/:id/context/summary', requireToken(db), asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const body = req.body as { branch_id?: unknown; conversation_id?: unknown };
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const branch = await resolveBranchOrRespond(
+      db,
+      res,
+      sessionId,
+      typeof body.branch_id === 'string' ? body.branch_id : undefined,
+    );
+    if (!branch) {
+      return;
+    }
+
+    const conversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      branch.id,
+      typeof body.conversation_id === 'string' ? body.conversation_id : undefined,
+    );
+    if (!conversation) {
+      return;
+    }
+
+    const storedMessages = await db.getBranchMessages(sessionId, branch.id, conversation.id);
+    const resource = await db.upsertContextResource({
+      session_id: sessionId,
+      branch_id: branch.id,
+      kind: 'summary',
+      title: `Summary: ${conversation.title}`,
+      content: buildConversationSummaryContent(conversation, storedMessages),
+      source_conversation_id: conversation.id,
+    });
+
+    res.status(201).json({ resource });
   }));
 
   router.put('/sessions/:id/workspace', requireToken(db), asyncRoute(async (req, res) => {
@@ -821,7 +1459,13 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
   // POST /api/sessions/:id/messages — single LLM call; stores tool_calls in DB if stop_reason='tool_use'
   router.post('/sessions/:id/messages', requireToken(db), asyncRoute(async (req, res) => {
     const sessionId = req.params['id'] as string;
-    const body = req.body as { message?: unknown; agent_config?: unknown; mode?: unknown; branch_id?: unknown };
+    const body = req.body as {
+      message?: unknown;
+      agent_config?: unknown;
+      mode?: unknown;
+      branch_id?: unknown;
+      conversation_id?: unknown;
+    };
 
     if (typeof body.message !== 'string' || !body.message.trim()) {
       res.status(400).json({ error: 'message is required and must be a non-empty string' });
@@ -848,6 +1492,16 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     if (!branch) {
       return;
     }
+    const conversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      branch.id,
+      typeof body.conversation_id === 'string' ? body.conversation_id : undefined,
+    );
+    if (!conversation) {
+      return;
+    }
 
     const elapsed = (Date.now() - session.created_at) / 1000;
     const timeLimitSeconds = session.constraint.time_limit_minutes * 60;
@@ -863,8 +1517,9 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     const mode: AgentRequestMode = isAgentRequestMode(body.mode) ? body.mode : 'build';
     const planFilePath = mode === 'plan' ? generatePlanFilePath() : undefined;
     const turnSequence = await db.allocateTurnSequence(sessionId);
-    const storedMessages = await db.getBranchMessages(sessionId, branch.id);
-    const history: Message[] = createRequestHistory(storedMessages, mode, planFilePath);
+    const storedMessages = await db.getBranchMessages(sessionId, branch.id, conversation.id);
+    const contextMessages = await buildContextMessages(db, sessionId, branch.id, conversation.id);
+    const history: Message[] = createRequestHistory(storedMessages, mode, planFilePath, contextMessages);
 
     const constraints_remaining: ConstraintsRemaining = {
       tokens_remaining: Math.max(0, session.constraint.max_session_tokens - session.tokens_used),
@@ -876,8 +1531,17 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     // Persist the user turn before calling the provider so it remains visible if the
     // adapter fails after the request has already been accepted.
-    await db.addBranchMessage(sessionId, branch.id, turnSequence, 'user', message, 0);
-    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'message', Date.now(), { role: 'user', content: message });
+    const titledConversation = await maybeRetitleConversationFromMessage(db, conversation, sessionId, branch.id, message);
+    await db.addBranchMessage(sessionId, branch.id, turnSequence, 'user', message, 0, titledConversation.id);
+    await db.addBranchReplayEvent(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'message',
+      Date.now(),
+      { role: 'user', content: message },
+      titledConversation.id,
+    );
 
     const reqAdapter = await resolveAdapter(adapter, body.agent_config);
 
@@ -890,7 +1554,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         content: null,
         stop_reason: 'error',
         error: errMsg,
-      });
+      }, titledConversation.id);
       res.status(502).json({ error: `Agent adapter error: ${errMsg}` });
       return;
     }
@@ -907,6 +1571,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       'assistant',
       assistantContent,
       agentResponse.usage.completion_tokens,
+      titledConversation.id,
     );
 
     // Update usage counters (+1 interaction for the initial user message)
@@ -914,16 +1579,32 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     // Record replay events
     const now = Date.now();
-    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', now, {
-      content: agentResponse.content,
-      stop_reason: agentResponse.stop_reason,
-      usage: agentResponse.usage,
-    });
-    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'resource_usage', now, {
-      prompt_tokens: agentResponse.usage.prompt_tokens,
-      completion_tokens: agentResponse.usage.completion_tokens,
-      total_tokens: agentResponse.usage.total_tokens,
-    });
+    await db.addBranchReplayEvent(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'agent_response',
+      now,
+      {
+        content: agentResponse.content,
+        stop_reason: agentResponse.stop_reason,
+        usage: agentResponse.usage,
+      },
+      titledConversation.id,
+    );
+    await db.addBranchReplayEvent(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'resource_usage',
+      now,
+      {
+        prompt_tokens: agentResponse.usage.prompt_tokens,
+        completion_tokens: agentResponse.usage.completion_tokens,
+        total_tokens: agentResponse.usage.total_tokens,
+      },
+      titledConversation.id,
+    );
 
     const updatedConstraints: ConstraintsRemaining = {
       tokens_remaining: Math.max(0, constraints_remaining.tokens_remaining - agentResponse.usage.total_tokens),
@@ -938,6 +1619,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       usage: agentResponse.usage,
       constraints_remaining: updatedConstraints,
       branch_id: branch.id,
+      conversation_id: titledConversation.id,
       turn_sequence: turnSequence,
     });
   }));
@@ -950,6 +1632,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       agent_config?: unknown;
       mode?: unknown;
       branch_id?: unknown;
+      conversation_id?: unknown;
       turn_sequence?: unknown;
     };
 
@@ -977,6 +1660,16 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     if (!branch) {
       return;
     }
+    const conversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      branch.id,
+      typeof body.conversation_id === 'string' ? body.conversation_id : undefined,
+    );
+    if (!conversation) {
+      return;
+    }
 
     const elapsed = (Date.now() - session.created_at) / 1000;
     const timeLimitSeconds = session.constraint.time_limit_minutes * 60;
@@ -991,15 +1684,24 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     const toolResults = body.tool_results as ToolResult[];
     const turnSequence = typeof body.turn_sequence === 'number' && Number.isInteger(body.turn_sequence)
       ? body.turn_sequence
-      : await resolveContinuationTurnSequence(db, sessionId, branch.id);
+      : await resolveContinuationTurnSequence(db, sessionId, branch.id, conversation.id);
 
     // Persist tool results
-    await db.addBranchMessage(sessionId, branch.id, turnSequence, 'tool', JSON.stringify(toolResults), 0);
+    await db.addBranchMessage(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'tool',
+      JSON.stringify(toolResults),
+      0,
+      conversation.id,
+    );
 
     // Rebuild history (now includes the tool results we just stored)
     const mode: AgentRequestMode = isAgentRequestMode(body.mode) ? body.mode : 'build';
-    const storedMessages = await db.getBranchMessages(sessionId, branch.id);
-    const history: Message[] = createRequestHistory(storedMessages, mode);
+    const storedMessages = await db.getBranchMessages(sessionId, branch.id, conversation.id);
+    const contextMessages = await buildContextMessages(db, sessionId, branch.id, conversation.id);
+    const history: Message[] = createRequestHistory(storedMessages, mode, undefined, contextMessages);
 
     const constraints_remaining: ConstraintsRemaining = {
       tokens_remaining: Math.max(0, session.constraint.max_session_tokens - session.tokens_used),
@@ -1021,7 +1723,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         content: null,
         stop_reason: 'error',
         error: errMsg,
-      });
+      }, conversation.id);
       res.status(502).json({ error: `Agent adapter error: ${errMsg}` });
       return;
     }
@@ -1038,6 +1740,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       'assistant',
       assistantContent,
       agentResponse.usage.completion_tokens,
+      conversation.id,
     );
 
     // Tool-results continuations count tokens but NOT an additional interaction
@@ -1045,17 +1748,41 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     // Record replay events
     const now = Date.now();
-    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'tool_result', now, { tool_results: toolResults });
-    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', now, {
-      content: agentResponse.content,
-      stop_reason: agentResponse.stop_reason,
-      usage: agentResponse.usage,
-    });
-    await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'resource_usage', now, {
-      prompt_tokens: agentResponse.usage.prompt_tokens,
-      completion_tokens: agentResponse.usage.completion_tokens,
-      total_tokens: agentResponse.usage.total_tokens,
-    });
+    await db.addBranchReplayEvent(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'tool_result',
+      now,
+      { tool_results: toolResults },
+      conversation.id,
+    );
+    await db.addBranchReplayEvent(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'agent_response',
+      now,
+      {
+        content: agentResponse.content,
+        stop_reason: agentResponse.stop_reason,
+        usage: agentResponse.usage,
+      },
+      conversation.id,
+    );
+    await db.addBranchReplayEvent(
+      sessionId,
+      branch.id,
+      turnSequence,
+      'resource_usage',
+      now,
+      {
+        prompt_tokens: agentResponse.usage.prompt_tokens,
+        completion_tokens: agentResponse.usage.completion_tokens,
+        total_tokens: agentResponse.usage.total_tokens,
+      },
+      conversation.id,
+    );
 
     const updatedConstraints: ConstraintsRemaining = {
       tokens_remaining: Math.max(0, constraints_remaining.tokens_remaining - agentResponse.usage.total_tokens),
@@ -1070,6 +1797,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       usage: agentResponse.usage,
       constraints_remaining: updatedConstraints,
       branch_id: branch.id,
+      conversation_id: conversation.id,
       turn_sequence: turnSequence,
     });
   }));
@@ -1077,7 +1805,13 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
   // POST /api/sessions/:id/messages/stream — SSE agent loop (wires runAgentLoop server-side)
   router.post('/sessions/:id/messages/stream', requireToken(db), (req, res) => {
     const sessionId = req.params['id'] as string;
-    const body = req.body as { message?: unknown; agent_config?: unknown; mode?: unknown; branch_id?: unknown };
+    const body = req.body as {
+      message?: unknown;
+      agent_config?: unknown;
+      mode?: unknown;
+      branch_id?: unknown;
+      conversation_id?: unknown;
+    };
 
     if (typeof body.message !== 'string' || !body.message.trim()) {
       res.status(400).json({ error: 'message is required and must be a non-empty string' });
@@ -1113,6 +1847,18 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
           res.end();
           return;
         }
+        const conversation = await resolveConversationOrRespond(
+          db,
+          res,
+          sessionId,
+          branch.id,
+          typeof body.conversation_id === 'string' ? body.conversation_id : undefined,
+        );
+        if (!conversation) {
+          sendEvent('error', { error: 'Conversation not found' });
+          res.end();
+          return;
+        }
 
         const elapsed = (Date.now() - session.created_at) / 1000;
         const timeLimitSeconds = session.constraint.time_limit_minutes * 60;
@@ -1123,8 +1869,9 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         ) { sendEvent('error', { error: 'Session constraints exhausted' }); res.end(); return; }
 
         const turnSequence = await db.allocateTurnSequence(sessionId);
-        const storedMessages = await db.getBranchMessages(sessionId, branch.id);
-        const history = createRequestHistory(storedMessages, mode, planFilePath);
+        const storedMessages = await db.getBranchMessages(sessionId, branch.id, conversation.id);
+        const contextMessages = await buildContextMessages(db, sessionId, branch.id, conversation.id);
+        const history = createRequestHistory(storedMessages, mode, planFilePath, contextMessages);
         const constraints_remaining: ConstraintsRemaining = {
           tokens_remaining: Math.max(0, session.constraint.max_session_tokens - session.tokens_used),
           interactions_remaining: Math.max(0, session.constraint.max_interactions - session.interactions_used),
@@ -1133,11 +1880,20 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         const context: SessionContext = { session_id: sessionId, history, constraints_remaining };
 
         // Persist the user turn before entering the loop so it survives provider/tool failures.
-        await db.addBranchMessage(sessionId, branch.id, turnSequence, 'user', message, 0);
-        await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'message', Date.now(), {
-          role: 'user',
-          content: message,
-        });
+        const titledConversation = await maybeRetitleConversationFromMessage(db, conversation, sessionId, branch.id, message);
+        await db.addBranchMessage(sessionId, branch.id, turnSequence, 'user', message, 0, titledConversation.id);
+        await db.addBranchReplayEvent(
+          sessionId,
+          branch.id,
+          turnSequence,
+          'message',
+          Date.now(),
+          {
+            role: 'user',
+            content: message,
+          },
+          titledConversation.id,
+        );
 
         const reqAdapter = await resolveAdapter(adapter, body.agent_config);
 
@@ -1148,6 +1904,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
             description,
             tool_calls: calls,
             branch_id: branch.id,
+            conversation_id: titledConversation.id,
             turn_sequence: turnSequence,
           });
           return new Promise<ToolResult[]>((resolve) => registerPendingTools(requestId, resolve));
@@ -1162,7 +1919,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
             content: null,
             stop_reason: 'error',
             error: errMsg,
-          });
+          }, titledConversation.id);
           sendEvent('error', { error: errMsg });
           res.end();
           return;
@@ -1175,8 +1932,8 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
             content: action.description,
             tool_calls: action.tool_calls,
           });
-          await db.addBranchMessage(sessionId, branch.id, turnSequence, 'assistant', encoded, 0);
-          await db.addBranchMessage(sessionId, branch.id, turnSequence, 'tool', JSON.stringify(action.tool_results), 0);
+          await db.addBranchMessage(sessionId, branch.id, turnSequence, 'assistant', encoded, 0, titledConversation.id);
+          await db.addBranchMessage(sessionId, branch.id, turnSequence, 'tool', JSON.stringify(action.tool_results), 0, titledConversation.id);
         }
 
         // Persist final assistant message
@@ -1187,6 +1944,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
           'assistant',
           loopResult.content ?? '',
           loopResult.total_usage.completion_tokens,
+          titledConversation.id,
         );
 
         // 1 interaction for the full agent turn; all LLM calls' tokens aggregated
@@ -1198,17 +1956,17 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
           await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'tool_call', now, {
             description: action.description,
             tool_calls: action.tool_calls,
-          });
+          }, titledConversation.id);
           await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'tool_result', now, {
             tool_results: action.tool_results,
-          });
+          }, titledConversation.id);
         }
         await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', now, {
           content: loopResult.content,
           stop_reason: loopResult.stop_reason,
           usage: loopResult.total_usage,
-        });
-        await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'resource_usage', now, loopResult.total_usage);
+        }, titledConversation.id);
+        await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'resource_usage', now, loopResult.total_usage, titledConversation.id);
 
         const updatedConstraints: ConstraintsRemaining = {
           tokens_remaining: Math.max(0, constraints_remaining.tokens_remaining - loopResult.total_usage.total_tokens),
@@ -1223,6 +1981,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
           usage: loopResult.total_usage,
           constraints_remaining: updatedConstraints,
           branch_id: branch.id,
+          conversation_id: titledConversation.id,
           turn_sequence: turnSequence,
         });
       } catch (err) {
@@ -1275,8 +2034,26 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       return;
     }
 
-    const messages = await db.getBranchMessages(sessionId, branch.id);
-    res.json({ messages, branch, branches: await db.listBranches(sessionId) });
+    const conversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      branch.id,
+      typeof req.query['conversation_id'] === 'string' ? req.query['conversation_id'] : undefined,
+    );
+    if (!conversation) {
+      return;
+    }
+
+    const messages = await db.getBranchMessages(sessionId, branch.id, conversation.id);
+    res.json({
+      messages,
+      branch,
+      branches: await db.listBranches(sessionId),
+      conversation,
+      conversations: await db.listConversations(sessionId, branch.id),
+      active_conversation_id: conversation.id,
+    });
   }));
 
   // GET /api/sessions/:id/replay — session recording for review
@@ -1298,14 +2075,26 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       return;
     }
 
-    const stored = await db.getBranchReplayEvents(sessionId, branch.id);
+    const conversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      branch.id,
+      typeof req.query['conversation_id'] === 'string' ? req.query['conversation_id'] : undefined,
+    );
+    if (!conversation) {
+      return;
+    }
+
+    const stored = await db.getBranchReplayEvents(sessionId, branch.id, conversation.id);
     const recording = {
       session_id: sessionId,
       branch_id: branch.id,
+      conversation_id: conversation.id,
       events: stored.map((e) => ({ type: e.type, timestamp: e.timestamp, payload: e.payload })),
     };
 
-    res.json({ ...recording, branch, branches: await db.listBranches(sessionId) });
+    res.json({ ...recording, branch, branches: await db.listBranches(sessionId), conversation });
   }));
 
   // GET /api/review/:id — aggregate review data for replay dashboard
@@ -1327,9 +2116,20 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       return;
     }
 
-    const storedMessages = await db.getBranchMessages(sessionId, branch.id);
+    const conversation = await resolveConversationOrRespond(
+      db,
+      res,
+      sessionId,
+      branch.id,
+      typeof req.query['conversation_id'] === 'string' ? req.query['conversation_id'] : undefined,
+    );
+    if (!conversation) {
+      return;
+    }
+
+    const storedMessages = await db.getBranchMessages(sessionId, branch.id, conversation.id);
     const messages = buildHistory(storedMessages);
-    const storedEvents = await db.getBranchReplayEvents(sessionId, branch.id);
+    const storedEvents = await db.getBranchReplayEvents(sessionId, branch.id, conversation.id);
     const workspaceSnapshot = await db.getWorkspaceSnapshot(sessionId, branch.id);
     const recording = {
       session_id: sessionId,
@@ -1351,6 +2151,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       prompt,
       branch,
       branches: await db.listBranches(sessionId),
+      conversation,
       workspace_snapshot: workspaceSnapshot,
     });
   }));

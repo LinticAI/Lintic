@@ -14,11 +14,14 @@ interface DevSetupProps {
   onSessionReady: (session: DevSession) => void;
 }
 
+const LOCAL_DEV_BASE_URL = 'http://localhost:8080/v1';
+const LOCAL_DEV_API_KEY = 'local-dev';
 const PROVIDERS: { value: AgentConfig['provider']; label: string; defaultModel: string; defaultBaseUrl?: string }[] = [
   { value: 'openai-compatible', label: 'OpenAI / OpenAI-compatible', defaultModel: 'gpt-4o' },
   { value: 'anthropic-native', label: 'Anthropic', defaultModel: 'claude-opus-4-5' },
   { value: 'groq', label: 'Groq', defaultModel: 'llama-3.3-70b-versatile', defaultBaseUrl: 'https://api.groq.com/openai' },
   { value: 'cerebras', label: 'Cerebras', defaultModel: 'llama3.1-8b', defaultBaseUrl: 'https://api.cerebras.ai' },
+  { value: 'local-openai', label: 'Local OpenAI-compatible', defaultModel: 'qwen2.5-coder', defaultBaseUrl: LOCAL_DEV_BASE_URL },
 ];
 
 export function DevSetup({ apiBase = '', onSessionReady }: DevSetupProps) {
@@ -29,6 +32,9 @@ export function DevSetup({ apiBase = '', onSessionReady }: DevSetupProps) {
   const [loading, setLoading] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isLocalServerMode = provider === 'local-openai';
+  const resolvedApiKey = apiKey.trim() || (isLocalServerMode ? LOCAL_DEV_API_KEY : '');
+  const startDisabled = loading || reviewLoading || !resolvedApiKey || !model.trim();
 
   function handleProviderChange(newProvider: AgentConfig['provider']) {
     setProvider(newProvider);
@@ -36,6 +42,14 @@ export function DevSetup({ apiBase = '', onSessionReady }: DevSetupProps) {
     if (p) {
       setModel(p.defaultModel);
       setBaseUrl(p.defaultBaseUrl ?? '');
+    }
+  }
+
+  function handleUseLocalServer() {
+    setProvider('local-openai');
+    setBaseUrl(LOCAL_DEV_BASE_URL);
+    if (!apiKey.trim()) {
+      setApiKey(LOCAL_DEV_API_KEY);
     }
   }
 
@@ -60,7 +74,7 @@ export function DevSetup({ apiBase = '', onSessionReady }: DevSetupProps) {
   }
 
   async function handleStart() {
-    if (!apiKey.trim() || !model.trim()) return;
+    if (!resolvedApiKey || !model.trim()) return;
     setLoading(true);
     setError(null);
 
@@ -69,7 +83,7 @@ export function DevSetup({ apiBase = '', onSessionReady }: DevSetupProps) {
 
       const agentConfig: AgentConfig = {
         provider,
-        api_key: apiKey.trim(),
+        api_key: resolvedApiKey,
         model: model.trim(),
         ...(baseUrl.trim() ? { base_url: baseUrl.trim() } : {}),
       };
@@ -150,16 +164,39 @@ export function DevSetup({ apiBase = '', onSessionReady }: DevSetupProps) {
                 <option key={p.value} value={p.value}>{p.label}</option>
               ))}
             </select>
+            <button
+              type="button"
+              onClick={handleUseLocalServer}
+              style={{
+                marginTop: '8px',
+                background: isLocalServerMode ? '#1e3a5a' : '#141414',
+                color: isLocalServerMode ? '#90b8d8' : '#888888',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '6px 10px',
+                fontSize: '11px',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+              data-testid="dev-use-local-server"
+            >
+              Use local server ({LOCAL_DEV_BASE_URL})
+            </button>
           </div>
 
           {/* API Key */}
           <div>
-            <label style={labelStyle}>API Key</label>
+            <label style={labelStyle}>
+              API Key
+              {isLocalServerMode ? (
+                <span style={{ color: '#333333' }}> (optional for local)</span>
+              ) : null}
+            </label>
             <input
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
+              placeholder={isLocalServerMode ? LOCAL_DEV_API_KEY : 'sk-...'}
               style={inputStyle}
               data-testid="dev-api-key"
             />
@@ -185,10 +222,19 @@ export function DevSetup({ apiBase = '', onSessionReady }: DevSetupProps) {
               type="text"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.openai.com"
+              placeholder={LOCAL_DEV_BASE_URL}
               style={inputStyle}
               data-testid="dev-base-url"
             />
+            {isLocalServerMode ? (
+              <div
+                className="mt-2 text-[11px]"
+                style={{ color: '#666666' }}
+                data-testid="dev-local-server-hint"
+              >
+                Local mode uses `local-openai` against {LOCAL_DEV_BASE_URL}. Change the model name to match your local server.
+              </div>
+            ) : null}
           </div>
 
           {error && (
@@ -203,15 +249,15 @@ export function DevSetup({ apiBase = '', onSessionReady }: DevSetupProps) {
 
           <button
             onClick={() => void handleStart()}
-            disabled={loading || reviewLoading || !apiKey.trim() || !model.trim()}
+            disabled={startDisabled}
             style={{
-              background: loading || reviewLoading || !apiKey.trim() || !model.trim() ? '#1a1a1a' : '#1e3a5a',
-              color: loading || reviewLoading || !apiKey.trim() || !model.trim() ? '#444444' : '#90b8d8',
+              background: startDisabled ? '#1a1a1a' : '#1e3a5a',
+              color: startDisabled ? '#444444' : '#90b8d8',
               border: 'none',
               borderRadius: '4px',
               padding: '8px 16px',
               fontSize: '12px',
-              cursor: loading || reviewLoading || !apiKey.trim() || !model.trim() ? 'not-allowed' : 'pointer',
+              cursor: startDisabled ? 'not-allowed' : 'pointer',
               fontFamily: 'inherit',
               width: '100%',
             }}

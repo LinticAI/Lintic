@@ -25,7 +25,9 @@ export function resolveEnvVars(value) {
     return value;
 }
 // ─── Validation ───────────────────────────────────────────────────────────────
-const VALID_PROVIDERS = ['openai-compatible', 'anthropic-native', 'groq', 'cerebras'];
+const VALID_PROVIDERS = ['openai-compatible', 'anthropic-native', 'groq', 'cerebras', 'local-openai'];
+const LOCAL_OPENAI_DEFAULT_API_KEY = 'local-dev';
+const LOCAL_OPENAI_DEFAULT_BASE_URL = 'http://localhost:8080/v1';
 function err(msg) {
     throw new Error(`Config error: ${msg}`);
 }
@@ -55,10 +57,17 @@ export function validateConfig(raw) {
     if (!VALID_PROVIDERS.includes(provider)) {
         err(`agent.provider must be one of: ${VALID_PROVIDERS.join(', ')}`);
     }
-    const api_key = assertNonEmptyString(rawAgent.api_key, 'agent.api_key');
-    const model = assertNonEmptyString(rawAgent.model, 'agent.model');
     const base_url = typeof rawAgent.base_url === 'string' ? rawAgent.base_url : undefined;
-    const agent = { provider, api_key, model, ...(base_url ? { base_url } : {}) };
+    const api_key = provider === 'local-openai'
+        ? (typeof rawAgent.api_key === 'string' && rawAgent.api_key.trim()
+            ? rawAgent.api_key.trim()
+            : LOCAL_OPENAI_DEFAULT_API_KEY)
+        : assertNonEmptyString(rawAgent.api_key, 'agent.api_key');
+    const model = assertNonEmptyString(rawAgent.model, 'agent.model');
+    const resolvedBaseUrl = provider === 'local-openai'
+        ? (base_url?.trim() ? base_url.trim() : LOCAL_OPENAI_DEFAULT_BASE_URL)
+        : base_url;
+    const agent = { provider, api_key, model, ...(resolvedBaseUrl ? { base_url: resolvedBaseUrl } : {}) };
     // ── constraints ──
     const rawConstraints = assertObj(root.constraints, 'constraints');
     const constraints = {

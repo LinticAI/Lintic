@@ -83,7 +83,7 @@ GET  /health                    Health check
 
 ```yaml
 agent:
-  provider: openai-compatible   # or 'anthropic-native'
+  provider: openai-compatible   # or 'local-openai', 'anthropic-native', 'groq', 'cerebras'
   base_url: https://api.openai.com/v1
   api_key: ${OPENAI_API_KEY}    # ${ENV_VAR} syntax supported
   model: gpt-4o

@@ -2,6 +2,11 @@ agent:
   provider: cerebras
   api_key: ${LINTIC_API_KEY}
   model: qwen-3-235b-a22b-instruct-2507
+  # For local OpenAI-compatible models, use:
+  #provider: local-openai
+  #model: mlx-community/gemma-4-26b-a4b-it-4bit
+  #base_url: http://localhost:8080/v1
+  #api_key: local-dev
 
 constraints:
   max_session_tokens: 50000

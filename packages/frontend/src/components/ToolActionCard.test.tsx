@@ -94,6 +94,16 @@ describe('ToolActionCard', () => {
     expect(diff.textContent).toContain('+ line2');
   });
 
+  test('keeps wide diff previews scrollable within the tool card', () => {
+    const action: LocalToolAction = {
+      tool_calls: [{ id: 'tc-2', name: 'write_file', input: { path: '/app/out.ts', content: 'x'.repeat(400) } }],
+      tool_results: [{ tool_call_id: 'tc-2', name: 'write_file', output: 'ok', is_error: false }],
+    };
+    render(<ToolActionCard action={action} />);
+    fireEvent.click(screen.getByTestId('tool-action-toggle'));
+    expect(screen.getByTestId('tool-action-diff')).toHaveClass('overflow-x-auto');
+  });
+
   test('shows run_command output in a pre block', () => {
     const action: LocalToolAction = {
       tool_calls: [{ id: 'tc-3', name: 'run_command', input: { command: 'npm test' } }],
@@ -104,6 +114,7 @@ describe('ToolActionCard', () => {
     const result = screen.getByTestId('tool-action-result');
     expect(result.tagName).toBe('PRE');
     expect(result.textContent).toContain('PASS 5 tests');
+    expect(result).toHaveClass('overflow-x-auto');
   });
 
   test('renders one card per tool call in an action', () => {

@@ -41,6 +41,10 @@ export function createStarterConfig(): string {
   provider: openai-compatible
   api_key: \${OPENAI_API_KEY}
   model: gpt-4o
+  # For local OpenAI-compatible servers, use:
+  # provider: local-openai
+  # model: qwen2.5-coder
+  # base_url: http://localhost:8080/v1
 
 constraints:
   max_session_tokens: 50000

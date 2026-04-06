@@ -337,6 +337,26 @@ describe('ChatPanel', () => {
     });
   });
 
+  test('constrains rendered markdown bubbles so wide code blocks do not expand the pane', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(historyResponse)
+      .mockResolvedValueOnce(makeSSEResponse([{ event: 'done', data: sseAgentDone('```markdown\\n# Plan\\n```') }]));
+
+    render(<ChatPanel sessionId="s1" constraints={defaultConstraints} />);
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hi' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => {
+      const agentBubble = screen.getByTestId('agent-message');
+      expect(agentBubble).toHaveClass('chat-markdown');
+      expect(agentBubble).toHaveClass('max-w-full');
+      expect(agentBubble).toHaveClass('min-w-0');
+      expect(agentBubble).toHaveClass('overflow-x-auto');
+    });
+  });
+
   // ── Stop button ─────────────────────────────────────────────────────────────
 
   test('shows Stop button while loading', async () => {
@@ -780,5 +800,110 @@ describe('ChatPanel', () => {
     fireEvent.click(screen.getByTestId('confirm-checkpoint'));
 
     expect(onSaveCheckpoint).toHaveBeenCalledWith('Checkpoint Alpha');
+  });
+
+  test('opens the context panel and shows conversation/context controls for the active branch', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/conversations')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                id: 'conv-1',
+                branch_id: 'branch-1',
+                title: 'New chat',
+                archived: false,
+                created_at: 1,
+                updated_at: 2,
+              },
+              {
+                id: 'conv-0',
+                branch_id: 'branch-1',
+                title: 'Earlier chat',
+                archived: false,
+                created_at: 0,
+                updated_at: 1,
+              },
+            ],
+            active_conversation_id: 'conv-1',
+          }),
+        } as unknown as Response;
+      }
+      if (url.includes('/context?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                id: 'conv-1',
+                branch_id: 'branch-1',
+                title: 'New chat',
+                archived: false,
+                created_at: 1,
+                updated_at: 2,
+              },
+              {
+                id: 'conv-0',
+                branch_id: 'branch-1',
+                title: 'Earlier chat',
+                archived: false,
+                created_at: 0,
+                updated_at: 1,
+              },
+            ],
+            attachments: [],
+            resources: [],
+            available: {
+              files: [{ path: 'src/app.ts', label: 'src/app.ts', selected: true }],
+              resources: [{ id: 'repo-1', kind: 'repo_map', title: 'Repository Map', source_conversation_id: null, selected: false }],
+              prior_conversations: [{ id: 'conv-0', title: 'Earlier chat', updated_at: 1, selected: false }],
+            },
+          }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          messages: [],
+          conversations: [
+            {
+              id: 'conv-1',
+              branch_id: 'branch-1',
+              title: 'New chat',
+              archived: false,
+              created_at: 1,
+              updated_at: 2,
+            },
+          ],
+          active_conversation_id: 'conv-1',
+        }),
+      } as unknown as Response;
+    });
+
+    render(
+      <ChatPanel
+        sessionId="s1"
+        constraints={defaultConstraints}
+        branches={[{ id: 'branch-1', name: 'main', created_at: 1000 }]}
+        activeBranchId="branch-1"
+        activeFilePath="src/app.ts"
+      />,
+    );
+
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId('context-panel-trigger'));
+
+    expect(await screen.findByTestId('context-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('new-chat-button')).toBeInTheDocument();
+    expect(screen.getByTestId('clear-chat-button')).toBeInTheDocument();
+    expect(screen.getByTestId('generate-repo-map-button')).toBeInTheDocument();
+    expect(screen.getByTestId('generate-summary-button')).toBeInTheDocument();
+    expect(screen.getByTestId('conversation-item-conv-0')).toBeInTheDocument();
+    expect(screen.getByTestId('context-file-src/app.ts')).toBeInTheDocument();
+    expect(screen.getByTestId('context-resource-repo-1')).toBeInTheDocument();
+    expect(screen.getByTestId('context-prior-conversation-conv-0')).toBeInTheDocument();
   });
 });

@@ -20,7 +20,7 @@ Traditional coding assessments test memorization. Lintic tests AI collaboration 
 - Signed single-use assessment links with configurable expiry
 - Session replay for reviewers with synchronized conversation, code diffs, and a timeline scrubber
 - Candidate comparison dashboard with sortable metrics
-- OpenAI-compatible, Cerebras, Groq, and Anthropic native adapters — plug in any model
+- OpenAI-compatible, local OpenAI-compatible, Cerebras, Groq, and Anthropic native adapters — plug in any model
 - SQLite (default) or PostgreSQL database backend
 - Single Docker image, `docker compose up` deployment
 
@@ -50,7 +50,7 @@ Lintic ships as a single production image. The Express backend serves the built 
 
 ```yaml
 agent:
-  provider: openai-compatible       # or cerebras, groq, anthropic-native
+  provider: openai-compatible       # or local-openai, cerebras, groq, anthropic-native
   base_url: https://api.openai.com/v1
   api_key: ${LINTIC_API_KEY}
   model: gpt-4o
@@ -67,6 +67,16 @@ prompts:
     description: Build a REST API for managing a library catalog with borrowing logic.
     difficulty: medium
     tags: [backend, api-design]
+```
+
+For a local OpenAI-compatible server, you can instead use:
+
+```yaml
+agent:
+  provider: local-openai
+  base_url: http://localhost:8080/v1   # optional; this is the default
+  api_key: local-dev                   # optional; defaults to local-dev
+  model: qwen2.5-coder
 ```
 
 ### 2. Set environment variables

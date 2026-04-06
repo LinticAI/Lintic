@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 
 interface SplitPaneProps {
   left: React.ReactNode;
@@ -36,15 +37,15 @@ export function SplitPane({ left, right }: SplitPaneProps) {
   return (
     <div
       ref={containerRef}
-      className="flex flex-col md:flex-row h-full w-full overflow-hidden gap-[5px]"
+      className="flex h-full w-full flex-col overflow-hidden gap-[5px] min-[920px]:flex-row"
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onMouseLeave={onMouseUp}
     >
       {/* Left pane (IDE) */}
       <div
-        className="overflow-hidden md:h-full h-1/2 rounded-[var(--assessment-radius-shell)] shadow-lg bg-[var(--color-bg-code)]"
-        style={{ width: `${leftPct}%` }}
+        className="min-w-0 basis-full overflow-hidden rounded-[var(--assessment-radius-shell)] bg-[var(--color-bg-code)] shadow-lg h-1/2 min-[920px]:h-full min-[920px]:basis-[var(--split-left-pct)]"
+        style={{ '--split-left-pct': `${leftPct}%` } as CSSProperties}
         data-testid="pane-left"
       >
         {left}
@@ -52,11 +53,11 @@ export function SplitPane({ left, right }: SplitPaneProps) {
 
       {/* Right pane (Chat) with resize handle on its left edge */}
       <div
-        className="relative overflow-hidden md:h-full flex-1 h-1/2 rounded-[var(--assessment-radius-shell)] shadow-lg bg-[var(--color-bg-panel)]"
+        className="relative min-w-0 basis-full overflow-hidden rounded-[var(--assessment-radius-shell)] bg-[var(--color-bg-panel)] shadow-lg h-1/2 min-[920px]:h-full min-[920px]:flex-1"
         data-testid="pane-right"
       >
         <div
-          className="hidden md:block absolute -left-2 top-0 bottom-0 w-3 cursor-col-resize z-50 hover:bg-white/5 transition-colors"
+          className="absolute -left-2 top-0 bottom-0 z-50 hidden w-3 cursor-col-resize transition-colors hover:bg-white/5 min-[920px]:block"
           onMouseDown={onMouseDown}
           role="separator"
           aria-orientation="vertical"

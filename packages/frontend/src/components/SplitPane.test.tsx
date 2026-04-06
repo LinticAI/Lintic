@@ -33,6 +33,19 @@ describe('SplitPane', () => {
   test('left pane starts at 50% width', () => {
     render(<SplitPane left={<div>Left</div>} right={<div>Right</div>} />);
     const leftPane = screen.getByTestId('pane-left');
-    expect(leftPane).toHaveStyle({ width: '50%' });
+    expect(leftPane).toHaveStyle({ '--split-left-pct': '50%' });
+  });
+
+  test('allows both panes to shrink when content is wide', () => {
+    render(<SplitPane left={<div>Left</div>} right={<div>Right</div>} />);
+    expect(screen.getByTestId('pane-left')).toHaveClass('min-w-0');
+    expect(screen.getByTestId('pane-right')).toHaveClass('min-w-0');
+  });
+
+  test('stacks below the desktop breakpoint and switches to row layout above it', () => {
+    render(<SplitPane left={<div>Left</div>} right={<div>Right</div>} />);
+    expect(screen.getByTestId('pane-left')).toHaveClass('basis-full');
+    expect(screen.getByTestId('pane-left')).toHaveClass('min-[920px]:basis-[var(--split-left-pct)]');
+    expect(screen.getByTestId('split-divider')).toHaveClass('min-[920px]:block');
   });
 });

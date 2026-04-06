@@ -35,12 +35,12 @@ export function TopBar({
 }: TopBarProps) {
   return (
     <header
-      className="flex items-center justify-between px-2 shrink-0"
-      style={{ height: '88px' }}
+      className="shrink-0 px-2"
+      style={{ minHeight: '88px' }}
     >
-      <div className="flex items-center gap-6">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-3 py-3 min-[1200px]:flex-nowrap">
         {/* Logo and Branding */}
-        <div className="flex items-center gap-3 pl-2 pr-6">
+        <div className="flex shrink-0 items-center gap-3 pl-2 pr-2 min-[1200px]:pr-6">
           <img 
             src={isDark ? "/logo-dark.png" : "/logo-light.png"} 
             alt="Lintic" 
@@ -49,15 +49,15 @@ export function TopBar({
           <span className="text-white font-bold text-xl tracking-tight">Lintic</span>
         </div>
 
-        <div className="flex items-center rounded-[var(--assessment-radius-shell)] bg-[#111111] border border-white/5 shadow-2xl pl-8 pr-2 py-2">
-          <div className="flex items-center gap-12 mr-10">
-            <div className="flex items-center gap-4">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3 rounded-[var(--assessment-radius-shell)] border border-white/5 bg-[#111111] px-4 py-2 shadow-2xl min-[1200px]:flex-nowrap min-[1200px]:pl-8 min-[1200px]:pr-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-2 min-[1200px]:mr-10 min-[1200px]:gap-12">
+            <div className="flex min-w-0 items-center gap-3 min-[1200px]:gap-4">
               <span className="text-[13px] text-[#555555] font-medium">Task:</span>
-              <span className="text-[13px] text-white font-bold whitespace-nowrap">{taskName}</span>
+              <span className="min-w-0 truncate text-[13px] font-bold text-white">{taskName}</span>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex min-w-0 items-center gap-3 min-[1200px]:gap-4">
               <span className="text-[13px] text-[#555555] font-medium">Deliverables:</span>
-              <span className="text-[13px] text-white font-bold whitespace-nowrap">{deliverables}</span>
+              <span className="min-w-0 truncate text-[13px] font-bold text-white">{deliverables}</span>
             </div>
           </div>
 
@@ -67,7 +67,7 @@ export function TopBar({
               data-1p-ignore
               data-testid="view-prompt"
               onClick={onViewPrompt}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-[var(--assessment-radius-control)] bg-[#1A1A1A] text-[#3887ce] text-[13px] font-bold tracking-tight hover:brightness-125 transition-all border border-white/5 shadow-lg"
+              className="flex shrink-0 items-center gap-2 rounded-[var(--assessment-radius-control)] border border-white/5 bg-[#1A1A1A] px-4 py-2.5 text-[13px] font-bold tracking-tight text-[#3887ce] shadow-lg transition-all hover:brightness-125 min-[1200px]:px-5"
             >
               View full prompt
             </button>
@@ -78,35 +78,35 @@ export function TopBar({
               type="button"
               data-testid="open-review-debug"
               onClick={onOpenReviewDebug}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-[var(--assessment-radius-control)] bg-[#1A1A1A] text-[#90b8d8] text-[13px] font-bold tracking-tight hover:brightness-125 transition-all border border-white/5 shadow-lg"
+              className="flex shrink-0 items-center gap-2 rounded-[var(--assessment-radius-control)] border border-white/5 bg-[#1A1A1A] px-4 py-2.5 text-[13px] font-bold tracking-tight text-[#90b8d8] shadow-lg transition-all hover:brightness-125 min-[1200px]:px-5"
             >
               Open review
             </button>
           ) : null}
         </div>
-      </div>
 
-      {/* Time & Submit */}
-      <div className="flex items-center gap-10 pr-4">
-        <div className="flex items-center gap-3">
+        {/* Time & Submit */}
+        <div className="flex shrink-0 items-center gap-4 pr-2 min-[1200px]:gap-10 min-[1200px]:pr-4">
+          <div className="flex items-center gap-3">
           <span className="text-[12px] text-[#555555] font-medium tracking-tight">Time remaining:</span>
-          <span data-testid="timer" className="text-[15px] text-white font-bold tabular-nums">
-            {formatTime(secondsRemaining)}
-          </span>
+            <span data-testid="timer" className="text-[15px] text-white font-bold tabular-nums">
+              {formatTime(secondsRemaining)}
+            </span>
+          </div>
+          <button
+            type="button"
+            data-testid="submit-task"
+            onClick={onSubmitTask}
+            disabled={submitDisabled || !onSubmitTask}
+            className="flex items-center gap-2 rounded-[var(--assessment-radius-control)] border border-[#10B981]/10 bg-[#064E3B] px-5 py-2.5 text-[13px] font-bold tracking-tight text-[#10B981] shadow-lg transition-all hover:brightness-110 min-[1200px]:px-7"
+            style={{
+              opacity: submitDisabled || !onSubmitTask ? 0.5 : 1,
+              cursor: submitDisabled || !onSubmitTask ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {submittingTask ? 'Submitting...' : 'Submit task'}
+          </button>
         </div>
-        <button
-          type="button"
-          data-testid="submit-task"
-          onClick={onSubmitTask}
-          disabled={submitDisabled || !onSubmitTask}
-          className="flex items-center gap-2 px-7 py-2.5 rounded-[var(--assessment-radius-control)] bg-[#064E3B] text-[#10B981] text-[13px] font-bold tracking-tight hover:brightness-110 transition-all border border-[#10B981]/10 shadow-lg"
-          style={{
-            opacity: submitDisabled || !onSubmitTask ? 0.5 : 1,
-            cursor: submitDisabled || !onSubmitTask ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {submittingTask ? 'Submitting...' : 'Submit task'}
-        </button>
       </div>
     </header>
   );

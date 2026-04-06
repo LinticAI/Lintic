@@ -110,6 +110,20 @@ describe('validateConfig', () => {
     expect(() => validateConfig(cfg)).not.toThrow();
   });
 
+  test('accepts local-openai as a valid provider', () => {
+    const cfg = {
+      ...VALID_CONFIG,
+      agent: {
+        provider: 'local-openai',
+        model: 'qwen2.5-coder',
+      },
+    };
+    expect(() => validateConfig(cfg)).not.toThrow();
+    const config = validateConfig(cfg);
+    expect(config.agent.api_key).toBe('local-dev');
+    expect(config.agent.base_url).toBe('http://localhost:8080/v1');
+  });
+
   test('throws when agent.provider is invalid', () => {
     const cfg = { ...VALID_CONFIG, agent: { ...VALID_CONFIG.agent, provider: 'unknown-llm' } };
     expect(() => validateConfig(cfg)).toThrow(/agent\.provider/);
@@ -124,6 +138,19 @@ describe('validateConfig', () => {
   test('throws when agent.api_key is an empty string', () => {
     const cfg = { ...VALID_CONFIG, agent: { ...VALID_CONFIG.agent, api_key: '' } };
     expect(() => validateConfig(cfg)).toThrow(/agent\.api_key/);
+  });
+
+  test('allows local-openai without an api key', () => {
+    const cfg = {
+      ...VALID_CONFIG,
+      agent: {
+        provider: 'local-openai',
+        api_key: '',
+        model: 'qwen2.5-coder',
+      },
+    };
+    const config = validateConfig(cfg);
+    expect(config.agent.api_key).toBe('local-dev');
   });
 
   test('throws when agent.model is missing', () => {
