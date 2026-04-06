@@ -320,3 +320,66 @@ export interface ReviewData {
   metrics: MetricResult[];
   recording: SessionRecording;
 }
+
+// ─── Session Analysis ─────────────────────────────────────────────────────────
+
+/** One cohesive work attempt between rewind boundaries. */
+export interface Iteration {
+  index: number;            // 1-indexed
+  rewound_at?: number;      // Unix ms – set if iteration was abandoned via rewind
+  message_count: number;
+  user_messages: string[];  // candidate prompt texts (for LLM context)
+}
+
+export interface RedisStats {
+  hits: number;
+  misses: number;
+  evictions: number;
+}
+
+export interface PostgresStats {
+  total_queries: number;
+  slow_queries: number;
+  indexed_data_queries: number;
+  total_data_queries: number;  // SELECT + UPDATE + DELETE
+}
+
+export interface InfrastructureMetricScore {
+  name: string;
+  label: string;
+  score: number; // 0–1
+  details: string;
+}
+
+export interface InfrastructureMetrics {
+  caching_effectiveness: InfrastructureMetricScore;
+  error_handling_coverage: InfrastructureMetricScore;
+  scaling_awareness: InfrastructureMetricScore;
+}
+
+export type RubricDimension =
+  | 'context_management'
+  | 'problem_decomposition'
+  | 'debugging_collaboration'
+  | 'task_iteration_velocity'
+  | 'security_awareness'
+  | 'strategic_backtracking'
+  | 'domain_knowledge_directiveness';
+
+export interface EvaluatorDimensionScore {
+  dimension: RubricDimension;
+  label: string;
+  score: number; // 0–10
+  rationale: string;
+}
+
+export interface EvaluatorResponse {
+  scores: EvaluatorDimensionScore[];
+  overall_summary: string;
+}
+
+export interface EvaluationResult {
+  infrastructure: InfrastructureMetrics;
+  llm_evaluation: EvaluatorResponse;
+  iterations: Iteration[];
+}

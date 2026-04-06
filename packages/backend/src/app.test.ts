@@ -761,6 +761,7 @@ describe('GET /api/review/:id', () => {
         content: 'Build it',
         token_count: 0,
         created_at: Date.now(),
+        rewound_at: null,
       },
       {
         id: 2,
@@ -772,6 +773,7 @@ describe('GET /api/review/:id', () => {
         content: 'Done',
         token_count: 20,
         created_at: Date.now(),
+        rewound_at: null,
       },
     ]);
     db.replayStore.set('sess-review:main', [

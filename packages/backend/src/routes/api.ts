@@ -29,6 +29,7 @@ import type {
   WorkspaceSection,
   WorkspaceSnapshotKind,
   MockPgPoolExport,
+  EvaluationResult,
 } from '@lintic/core';
 import {
   buildAssessmentLink,
@@ -37,7 +38,13 @@ import {
   resolveAdminKey,
   resolveSecretKey,
   verifyAssessmentLinkToken,
+  buildIterations,
+  extractRedisStats,
+  aggregatePostgresStats,
+  computeInfrastructureMetrics,
+  truncateHistory,
 } from '@lintic/core';
+import { evaluateSession } from '../services/SynchronousEvaluatorService.js';
 import { OpenAIAdapter, AnthropicAdapter } from '@lintic/adapters';
 import type { StoredMessage } from '@lintic/core';
 import { requireToken } from '../middleware/auth.js';
@@ -2154,6 +2161,61 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       conversation,
       workspace_snapshot: workspaceSnapshot,
     });
+  }));
+
+  // POST /api/sessions/:id/evaluate — run LLM evaluation and compute infra metrics (no session auth required, matches /review/:id)
+  router.post('/sessions/:id/evaluate', asyncRoute(async (req, res) => {
+    const sessionId = req.params['id'] as string;
+    const session = await db.getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    if (!config.evaluation) {
+      res.status(422).json({ error: 'No evaluation config found in lintic.yml — add an evaluation block to enable LLM scoring' });
+      return;
+    }
+
+    const branch = await db.getMainBranch(sessionId);
+    if (!branch) {
+      res.status(404).json({ error: 'Session branch not found' });
+      return;
+    }
+
+    // Load all messages including rewound to build the iteration graph
+    const allMessages = await db.getBranchMessages(sessionId, branch.id, undefined, { includeRewound: true });
+    const iterations = buildIterations(allMessages);
+
+    // Extract Redis stats from replay events
+    const replayEvents = await db.getBranchReplayEvents(sessionId, branch.id);
+    const redisStats = extractRedisStats(replayEvents);
+
+    // Load workspace snapshot for Postgres stats (prefer checkpoint, fall back to turn)
+    const snapshot =
+      await db.getWorkspaceSnapshot(sessionId, branch.id, { kind: 'checkpoint' })
+      ?? await db.getWorkspaceSnapshot(sessionId, branch.id, { kind: 'turn' })
+      ?? null;
+    const pgStats = aggregatePostgresStats(snapshot?.mock_pg ?? []);
+    const infrastructure = computeInfrastructureMetrics(redisStats, pgStats);
+
+    // Truncate history for evaluator context window
+    const maxHistory = config.evaluation.max_history_messages ?? 50;
+    const historyForEval = truncateHistory(allMessages, maxHistory).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    const llm_evaluation = await evaluateSession({
+      session,
+      iterations,
+      infrastructure,
+      truncatedHistory: historyForEval,
+      evaluationConfig: config.evaluation,
+    });
+
+    const result: EvaluationResult = { infrastructure, llm_evaluation, iterations };
+    res.json(result);
   }));
 
   // POST /api/sessions/:id/close — mark session as completed

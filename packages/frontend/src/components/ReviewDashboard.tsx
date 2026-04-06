@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Download, Moon, Sun, MessageSquare, Code, Activity, User, Terminal, ChevronDown, ChevronUp, Info, Zap, Cpu, LifeBuoy } from 'lucide-react';
+import { ChevronRight, Download, Moon, Sun, MessageSquare, Code, Activity, User, Terminal, ChevronDown, ChevronUp, Info, Zap, Cpu, LifeBuoy, FlaskConical, Database, Shield, BarChart2, GitBranch, Navigation, Layers, Clock, Loader } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   buildCodeStateSnapshot,
@@ -21,6 +21,42 @@ interface ReviewDashboardProps {
   apiBase?: string;
   isDark: boolean;
   onToggleTheme: () => void;
+}
+
+// ─── Evaluation types ───────────────────────────────────────────────────────
+
+interface InfraMetricScore {
+  name: string;
+  label: string;
+  score: number;
+  details: string;
+}
+
+interface EvaluatorDimensionScore {
+  dimension: string;
+  label: string;
+  score: number;
+  rationale: string;
+}
+
+interface Iteration {
+  index: number;
+  rewound_at?: number;
+  message_count: number;
+  user_messages: string[];
+}
+
+interface EvaluationResult {
+  infrastructure: {
+    caching_effectiveness: InfraMetricScore;
+    error_handling_coverage: InfraMetricScore;
+    scaling_awareness: InfraMetricScore;
+  };
+  llm_evaluation: {
+    scores: EvaluatorDimensionScore[];
+    overall_summary: string;
+  };
+  iterations: Iteration[];
 }
 
 function formatTimestamp(timestamp: number): string {
@@ -103,6 +139,126 @@ function parseToolResultBody(body: string): Array<{ name: string; summary: strin
     }
     return { name, summary, isError };
   });
+}
+
+// ── Infrastructure + LLM Scorecard panel ───────────────────────────────────
+
+const RUBRIC_ICONS: Record<string, React.ElementType> = {
+  context_management: Layers,
+  problem_decomposition: GitBranch,
+  debugging_collaboration: FlaskConical,
+  task_iteration_velocity: Clock,
+  security_awareness: Shield,
+  strategic_backtracking: Navigation,
+  domain_knowledge_directiveness: Database,
+};
+
+function InfraScoreRow({ metric }: { metric: InfraMetricScore }) {
+  const pct = Math.round(metric.score * 100);
+  const color = metric.score >= 0.7 ? '#10B981' : metric.score >= 0.4 ? '#F59E0B' : '#EF4444';
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <span className="w-44 shrink-0 text-[12px] font-medium" style={{ color: 'var(--color-text-dim)' }}>
+        {metric.label}
+      </span>
+      <div className="flex flex-1 items-center gap-2">
+        <div className="h-[4px] flex-1 overflow-hidden rounded-full" style={{ background: 'rgba(255,255,255,0.08)' }}>
+          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+        </div>
+        <span className="w-9 shrink-0 text-right text-[12px] font-bold tabular-nums" style={{ color }}>
+          {pct}%
+        </span>
+      </div>
+      <span className="hidden text-[11px] opacity-40 xl:block truncate max-w-[200px]" style={{ color: 'var(--color-text-dim)' }}>
+        {metric.details}
+      </span>
+    </div>
+  );
+}
+
+function LlmScoreRow({ score }: { score: EvaluatorDimensionScore }) {
+  const [open, setOpen] = useState(false);
+  const Icon = RUBRIC_ICONS[score.dimension] ?? BarChart2;
+  const color = score.score >= 7 ? '#10B981' : score.score >= 4 ? '#F59E0B' : '#EF4444';
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-left"
+      >
+        <Icon size={13} style={{ color, flexShrink: 0 }} />
+        <span className="flex-1 text-[12px] font-semibold truncate" style={{ color: 'var(--color-text-main)' }}>
+          {score.label}
+        </span>
+        <span className="shrink-0 text-[14px] font-bold tabular-nums" style={{ color }}>
+          {score.score.toFixed(1)}<span className="text-[10px] opacity-50">/10</span>
+        </span>
+        <ChevronRight size={12} style={{ color: 'var(--color-text-dimmest)', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms ease' }} />
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-0 text-[12px] leading-relaxed opacity-70" style={{ color: 'var(--color-text-dim)' }}>
+          {score.rationale}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvaluationPanel({ result }: { result: EvaluationResult }) {
+  const rewindCount = result.iterations.filter((it) => it.rewound_at !== undefined).length;
+  const infraScores = [
+    result.infrastructure.caching_effectiveness,
+    result.infrastructure.error_handling_coverage,
+    result.infrastructure.scaling_awareness,
+  ];
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Summary */}
+      <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(56,135,206,0.06)', borderLeft: '3px solid rgba(56,135,206,0.4)' }}>
+        <p className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text-dim)' }}>
+          {result.llm_evaluation.overall_summary}
+        </p>
+      </div>
+
+      {/* Iterations */}
+      <div className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--color-text-dimmest)' }}>
+        <GitBranch size={12} />
+        <span>{result.iterations.length} iterations</span>
+        {rewindCount > 0 && (
+          <span className="rounded-xl px-1.5 py-0.5" style={{ background: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
+            {rewindCount} rewound
+          </span>
+        )}
+      </div>
+
+      {/* Infrastructure */}
+      <div>
+        <div className="mb-2 flex items-center gap-2">
+          <Database size={13} style={{ color: 'var(--color-text-dimmest)' }} />
+          <span className="text-[11px] font-bold uppercase tracking-wider opacity-40" style={{ color: 'var(--color-text-dim)' }}>
+            Infrastructure
+          </span>
+        </div>
+        <div className="flex flex-col divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+          {infraScores.map((m) => <InfraScoreRow key={m.name} metric={m} />)}
+        </div>
+      </div>
+
+      {/* LLM Dimensions */}
+      <div>
+        <div className="mb-2 flex items-center gap-2">
+          <FlaskConical size={13} style={{ color: 'var(--color-text-dimmest)' }} />
+          <span className="text-[11px] font-bold uppercase tracking-wider opacity-40" style={{ color: 'var(--color-text-dim)' }}>
+            Collaboration Quality
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          {result.llm_evaluation.scores.map((s) => <LlmScoreRow key={s.dimension} score={s} />)}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Metrics strip ───────────────────────────────────────────────────────────
@@ -447,6 +603,10 @@ export function ReviewDashboard({
   const [selectedEventIndex, setSelectedEventIndex] = useState(0);
   const [activeBranchId, setActiveBranchId] = useState<string | null>(null);
   const [showMetricDetails, setShowMetricDetails] = useState(false);
+  const [evaluationResult, setEvaluationResult] = useState<EvaluationResult | null>(null);
+  const [evaluating, setEvaluating] = useState(false);
+  const [evaluationError, setEvaluationError] = useState<string | null>(null);
+  const [showEvaluation, setShowEvaluation] = useState(false);
   const conversationRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   useEffect(() => {
@@ -482,6 +642,29 @@ export function ReviewDashboard({
 
     return () => { cancelled = true; };
   }, [activeBranchId, apiBase, sessionId]);
+
+  const handleAnalyzeSession = async () => {
+    if (evaluating) return;
+    setEvaluating(true);
+    setEvaluationError(null);
+    setShowEvaluation(true);
+    try {
+      const response = await fetch(`${apiBase}/api/sessions/${sessionId}/evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) {
+        const body = await response.json() as { error?: string };
+        throw new Error(body.error ?? `HTTP ${response.status}`);
+      }
+      const result = await response.json() as EvaluationResult;
+      setEvaluationResult(result);
+    } catch (err) {
+      setEvaluationError(err instanceof Error ? err.message : 'Evaluation failed');
+    } finally {
+      setEvaluating(false);
+    }
+  };
 
   const events = useMemo(() => {
     if (!data) return [];
@@ -598,6 +781,19 @@ export function ReviewDashboard({
         <div className="flex shrink-0 items-center gap-4">
           <button
             type="button"
+            onClick={() => { void handleAnalyzeSession(); }}
+            disabled={evaluating}
+            className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold transition-colors hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ color: showEvaluation ? 'var(--color-brand)' : 'var(--color-text-muted)' }}
+            title="Run LLM evaluation and compute infrastructure metrics"
+          >
+            {evaluating
+              ? <Loader size={14} className="animate-spin" />
+              : <FlaskConical size={14} />}
+            Analyze Session
+          </button>
+          <button
+            type="button"
             onClick={() => setShowMetricDetails(!showMetricDetails)}
             className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold transition-colors hover:bg-white/5"
             style={{ color: showMetricDetails ? 'var(--color-brand)' : 'var(--color-text-muted)' }}
@@ -647,6 +843,47 @@ export function ReviewDashboard({
 
       {/* ── Metrics strip (Top) ── */}
       <MetricsStrip metrics={data.metrics} expanded={showMetricDetails} />
+
+      {/* ── Evaluation Panel ── */}
+      {showEvaluation && (
+        <div
+          className="shrink-0 overflow-y-auto max-h-[40vh] px-[5px] pb-[5px]"
+          style={{ background: 'var(--color-bg-app)' }}
+        >
+          <div className="rounded-xl p-4" style={{ background: 'var(--color-bg-panel)' }}>
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FlaskConical size={14} style={{ color: 'var(--color-brand)' }} />
+                <span className="text-[12px] font-bold" style={{ color: 'var(--color-text-dim)' }}>
+                  Session Analysis
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEvaluation(false)}
+                className="text-[11px] opacity-40 hover:opacity-80 transition-opacity"
+                style={{ color: 'var(--color-text-dim)' }}
+              >
+                dismiss
+              </button>
+            </div>
+            {evaluating && (
+              <div className="flex items-center gap-2 py-3 text-[12px]" style={{ color: 'var(--color-text-dimmest)' }}>
+                <Loader size={14} className="animate-spin" />
+                Running LLM evaluation…
+              </div>
+            )}
+            {evaluationError && !evaluating && (
+              <div className="text-[12px] py-2" style={{ color: 'var(--color-status-error)' }}>
+                {evaluationError}
+              </div>
+            )}
+            {evaluationResult && !evaluating && (
+              <EvaluationPanel result={evaluationResult} />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Timeline strip ── */}
       <div className="shrink-0 px-5 py-3 mb-2"
