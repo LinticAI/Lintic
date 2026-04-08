@@ -829,7 +829,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       res.status(400).json({ error: 'ids must be a non-empty array of strings' });
       return;
     }
-    const count = await db.deleteAssessmentLinks(body.ids as string[]);
+    const count = await db.deleteAssessmentLinks(body.ids);
     res.json({ deleted: count });
   }));
 
