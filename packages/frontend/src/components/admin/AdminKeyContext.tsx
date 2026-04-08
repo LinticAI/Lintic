@@ -5,7 +5,7 @@ interface AdminKeyContextValue {
   setAdminKey: (key: string) => void;
 }
 
-const AdminKeyContext = createContext<AdminKeyContextValue>({
+export const AdminKeyContext = createContext<AdminKeyContextValue>({
   adminKey: '',
   setAdminKey: () => {},
 });

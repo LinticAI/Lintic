@@ -48,5 +48,7 @@ lerna-debug.log*
 # Project specific
 tmp/
 temp/
+packages/*/dist/
+packages/*/node_modules/
 packages/backend/lintic.db
 packages/frontend/public/lintic-mock-pg.js

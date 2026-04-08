@@ -616,12 +616,14 @@ class FakeDb implements DatabaseAdapter {
     return Promise.resolve(this.usedAssessmentLinks.get(linkId) ?? null);
   }
 
-  deleteAssessmentLink(_id: string): Promise<boolean> {
-    return Promise.resolve(false);
+  deleteAssessmentLink(id: string): Promise<boolean> {
+    return Promise.resolve(this.assessmentLinks.delete(id));
   }
 
-  deleteAssessmentLinks(_ids: string[]): Promise<number> {
-    return Promise.resolve(0);
+  deleteAssessmentLinks(ids: string[]): Promise<number> {
+    let count = 0;
+    for (const id of ids) if (this.assessmentLinks.delete(id)) count++;
+    return Promise.resolve(count);
   }
 }
 
@@ -1085,6 +1087,82 @@ describe('GET /api/links/:id', () => {
       .set('X-Lintic-Api-Key', 'admin-key');
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe('DELETE /api/links/:id', () => {
+  test('deletes an existing link and returns { deleted: 1 }', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    db.assessmentLinks.set('link-1', {
+      id: 'link-1', token: 'token-1', url: 'http://localhost/assessment?token=token-1',
+      prompt_id: 'p', candidate_email: 'e@e.com', created_at: 1000, expires_at: 2000,
+      constraint: BASE_CONSTRAINT,
+    });
+
+    const res = await request(app)
+      .delete('/api/links/link-1')
+      .set('X-Lintic-Api-Key', 'admin-key');
+
+    expect(res.status).toBe(200);
+    expect((res.body as { deleted: number }).deleted).toBe(1);
+    expect(db.assessmentLinks.has('link-1')).toBe(false);
+  });
+
+  test('returns 404 for a nonexistent link', async () => {
+    const app = createApp(new FakeDb(), new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app)
+      .delete('/api/links/missing')
+      .set('X-Lintic-Api-Key', 'admin-key');
+
+    expect(res.status).toBe(404);
+  });
+
+  test('returns 401 without admin key', async () => {
+    const app = createApp(new FakeDb(), new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app).delete('/api/links/link-1');
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('DELETE /api/links', () => {
+  test('batch deletes links and returns count', async () => {
+    const db = new FakeDb();
+    const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
+    for (const id of ['link-1', 'link-2', 'link-3']) {
+      db.assessmentLinks.set(id, {
+        id, token: `token-${id}`, url: `http://localhost/assessment?token=${id}`,
+        prompt_id: 'p', candidate_email: 'e@e.com', created_at: 1000, expires_at: 2000,
+        constraint: BASE_CONSTRAINT,
+      });
+    }
+
+    const res = await request(app)
+      .delete('/api/links')
+      .set('X-Lintic-Api-Key', 'admin-key')
+      .send({ ids: ['link-1', 'link-2'] });
+
+    expect(res.status).toBe(200);
+    expect((res.body as { deleted: number }).deleted).toBe(2);
+    expect(db.assessmentLinks.has('link-1')).toBe(false);
+    expect(db.assessmentLinks.has('link-2')).toBe(false);
+    expect(db.assessmentLinks.has('link-3')).toBe(true);
+  });
+
+  test('returns 400 for missing ids', async () => {
+    const app = createApp(new FakeDb(), new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app)
+      .delete('/api/links')
+      .set('X-Lintic-Api-Key', 'admin-key')
+      .send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 401 without admin key', async () => {
+    const app = createApp(new FakeDb(), new FakeAdapter(), TEST_CONFIG);
+    const res = await request(app).delete('/api/links').send({ ids: ['link-1'] });
+    expect(res.status).toBe(401);
   });
 });
 
