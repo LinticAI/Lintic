@@ -277,6 +277,7 @@ export function CandidateComparisonDashboard({ isDark, onToggleTheme }: Candidat
             className="rounded-xl overflow-hidden"
             style={{ background: 'var(--color-bg-panel)' }}
           >
+            <div className="overflow-x-auto">
             <table className="min-w-full text-left text-[12px]">
               <thead>
                 <tr>
@@ -362,6 +363,7 @@ export function CandidateComparisonDashboard({ isDark, onToggleTheme }: Candidat
                 )}
               </tbody>
             </table>
+            </div>
 
             {/* Pagination */}
             {totalPages > 1 && (

@@ -1343,7 +1343,7 @@ export function ChatPanel({
           <div className="relative h-7 w-7 shrink-0">
             {checkpointEditing ? (
               <div
-                className="chat-inline-editor absolute left-0 top-1/2 z-10 flex w-[248px] -translate-y-1/2 items-center justify-start gap-2 px-2 py-1"
+                className="chat-inline-editor absolute left-0 top-1/2 z-10 flex w-[248px] max-w-[min(248px,calc(100vw-1rem))] -translate-y-1/2 items-center justify-start gap-2 px-2 py-1"
                 data-testid="checkpoint-editor"
               >
                 <span className="inline-flex shrink-0 items-center opacity-70">

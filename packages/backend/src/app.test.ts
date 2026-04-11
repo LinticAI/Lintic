@@ -2168,8 +2168,7 @@ describe('GET /api/sessions/comparison', () => {
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const { id } = await db.createSession({ prompt_id: 'test-prompt', candidate_email: 'b@test.com', constraint: BASE_CONSTRAINT });
     // Mark session as completed
-    const session = (await db.getSession(id))!;
-    db.sessions.set(id, { ...session, status: 'completed' });
+    db.sessions.set(id, { ...db.sessions.get(id)!, status: 'completed' });
 
     const res = await request(app)
       .get('/api/sessions/comparison')
@@ -2177,7 +2176,7 @@ describe('GET /api/sessions/comparison', () => {
     expect(res.status).toBe(200);
     const body = res.body as { sessions: Array<Record<string, unknown>> };
     expect(body.sessions).toHaveLength(1);
-    const row = body.sessions[0];
+    const row = body.sessions[0]!;
     expect(row['session_id']).toBe(id);
     expect(row['candidate_email']).toBe('b@test.com');
     expect(row['prompt_id']).toBe('test-prompt');
@@ -2189,8 +2188,7 @@ describe('GET /api/sessions/comparison', () => {
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     await db.createSession({ prompt_id: 'test-prompt', candidate_email: 'active@test.com', constraint: BASE_CONSTRAINT });
     const { id: completedId } = await db.createSession({ prompt_id: 'test-prompt', candidate_email: 'done@test.com', constraint: BASE_CONSTRAINT });
-    const completedSession = (await db.getSession(completedId))!;
-    db.sessions.set(completedId, { ...completedSession, status: 'completed' });
+    db.sessions.set(completedId, { ...db.sessions.get(completedId)!, status: 'completed' });
 
     const res = await request(app)
       .get('/api/sessions/comparison')
@@ -2198,37 +2196,37 @@ describe('GET /api/sessions/comparison', () => {
     expect(res.status).toBe(200);
     const body = res.body as { sessions: Array<Record<string, unknown>> };
     expect(body.sessions).toHaveLength(1);
-    expect(body.sessions[0]['candidate_email']).toBe('done@test.com');
+    expect(body.sessions[0]!['candidate_email']).toBe('done@test.com');
   });
 
   test('pq and cc are always null', async () => {
     const db = new FakeDb();
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const { id } = await db.createSession({ prompt_id: 'test-prompt', candidate_email: 'c@test.com', constraint: BASE_CONSTRAINT });
-    const session = (await db.getSession(id))!;
-    db.sessions.set(id, { ...session, status: 'completed' });
+    db.sessions.set(id, { ...db.sessions.get(id)!, status: 'completed' });
 
     const res = await request(app)
       .get('/api/sessions/comparison')
       .set('X-Lintic-Api-Key', ADMIN_KEY);
     const body = res.body as { sessions: Array<Record<string, unknown>> };
-    expect(body.sessions[0]['pq']).toBeNull();
-    expect(body.sessions[0]['cc']).toBeNull();
+    const row = body.sessions[0]!;
+    expect(row['pq']).toBeNull();
+    expect(row['cc']).toBeNull();
   });
 
   test('composite_score is null when session has no messages', async () => {
     const db = new FakeDb();
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const { id } = await db.createSession({ prompt_id: 'test-prompt', candidate_email: 'd@test.com', constraint: BASE_CONSTRAINT });
-    const session = (await db.getSession(id))!;
-    db.sessions.set(id, { ...session, status: 'completed' });
+    db.sessions.set(id, { ...db.sessions.get(id)!, status: 'completed' });
 
     const res = await request(app)
       .get('/api/sessions/comparison')
       .set('X-Lintic-Api-Key', ADMIN_KEY);
     const body = res.body as { sessions: Array<Record<string, unknown>> };
+    const row = body.sessions[0]!;
     // No messages means metrics may be 0, composite_score depends on metric values
-    expect(typeof body.sessions[0]['composite_score']).toBe('number');
+    expect(typeof row['composite_score']).toBe('number');
   });
 
   test('uses custom scoring weights from config when provided', async () => {
@@ -2239,8 +2237,7 @@ describe('GET /api/sessions/comparison', () => {
     };
     const app = createApp(db, new FakeAdapter(), configWithWeights);
     const { id } = await db.createSession({ prompt_id: 'test-prompt', candidate_email: 'e@test.com', constraint: BASE_CONSTRAINT });
-    const session = (await db.getSession(id))!;
-    db.sessions.set(id, { ...session, status: 'completed' });
+    db.sessions.set(id, { ...db.sessions.get(id)!, status: 'completed' });
 
     const res = await request(app)
       .get('/api/sessions/comparison')

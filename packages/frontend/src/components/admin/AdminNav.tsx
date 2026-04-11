@@ -41,14 +41,15 @@ function NavButton({
       key={id}
       type="button"
       onClick={onClick}
-      className={`flex w-full items-center gap-3 rounded-[var(--assessment-radius-control)] py-2 px-3 text-left text-[13px] transition-all duration-200 ${
-        active 
-          ? 'bg-[#1A1A1A] text-white shadow-lg' 
+      title={label}
+      className={`flex w-full items-center justify-center gap-3 rounded-[var(--assessment-radius-control)] py-2 px-3 text-left text-[13px] transition-all duration-200 lg:justify-start ${
+        active
+          ? 'bg-[#1A1A1A] text-white shadow-lg'
           : 'text-[#444444] hover:text-white hover:bg-white/5'
       }`}
     >
       <Icon size={16} strokeWidth={active ? 2.2 : 1.8} />
-      {label}
+      <span className="hidden lg:block">{label}</span>
     </button>
   );
 }
@@ -65,7 +66,7 @@ export function AdminNav({ section, onNavigate, isDark, onToggleTheme }: AdminNa
 
   return (
     <aside
-      className="flex h-full w-[240px] shrink-0 flex-col gap-4"
+      className="flex h-full w-12 lg:w-[240px] shrink-0 flex-col gap-4"
     >
       {/* Brand — matches TopBar typography but without box */}
       <div

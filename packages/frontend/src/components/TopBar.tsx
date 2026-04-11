@@ -36,10 +36,7 @@ export function TopBar({
   deliverables = 'PRD + Implementation',
 }: TopBarProps) {
   return (
-    <header
-      className="shrink-0 px-2"
-      style={{ minHeight: '88px' }}
-    >
+    <header className="shrink-0 px-2">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-3 py-3 min-[1200px]:flex-nowrap">
         {/* Logo and Branding */}
         <div className="flex shrink-0 items-center gap-3 pl-2 pr-2 min-[1200px]:pr-6">

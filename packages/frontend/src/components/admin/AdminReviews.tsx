@@ -115,6 +115,7 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
           className="rounded-xl overflow-hidden"
           style={{ background: 'var(--color-bg-panel)' }}
         >
+          <div className="overflow-x-auto">
           <table className="min-w-full text-left text-[12px]">
             <thead>
               <tr>
@@ -171,6 +172,7 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

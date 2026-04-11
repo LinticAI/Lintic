@@ -495,6 +495,7 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
               className="rounded-xl overflow-hidden"
               style={{ background: 'var(--color-bg-panel)' }}
             >
+              <div className="overflow-x-auto">
               <table className="min-w-full text-left text-[12px]">
                 <thead>
                   <tr>
@@ -638,6 +639,7 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
                   ) : null}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>
