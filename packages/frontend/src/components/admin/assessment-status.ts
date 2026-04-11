@@ -13,6 +13,7 @@ export function getAssessmentDisplayStatus(
   if (link.status === 'invalid') return 'invalid';
   if (link.status === 'expired') return 'expired';
   if (!link.consumed_session_id) return 'not_opened';
+  if (link.session_status === 'expired') return 'expired';
   if (link.session_status === 'active') return 'in_progress';
   return 'submitted';
 }

@@ -129,7 +129,7 @@ export interface DatabaseAdapter {
   getSessionToken(id: string): Promise<string | null>;
   addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void>;
   getMessages(sessionId: string): Promise<StoredMessage[]>;
-  closeSession(id: string): Promise<void>;
+  closeSession(id: string, status?: Exclude<SessionStatus, 'active'>): Promise<void>;
   listSessions(): Promise<Session[]>;
   getSessionsByPrompt(promptId: string): Promise<Session[]>;
   listAssessmentLinks(): Promise<AssessmentLinkRecord[]>;
@@ -193,6 +193,8 @@ export interface DatabaseAdapter {
   markAssessmentLinkUsed(linkId: string, sessionId: string): Promise<boolean>;
   isAssessmentLinkUsed(linkId: string): Promise<boolean>;
   getAssessmentLinkSessionId(linkId: string): Promise<string | null>;
+  deleteAssessmentLink(id: string): Promise<boolean>;
+  deleteAssessmentLinks(ids: string[]): Promise<number>;
 }
 
 // ─── Internal DB Row Types ────────────────────────────────────────────────────
@@ -1039,10 +1041,10 @@ export class SQLiteAdapter implements DatabaseAdapter {
     });
   }
 
-  closeSession(id: string): Promise<void> {
+  closeSession(id: string, status: Exclude<SessionStatus, 'active'> = 'completed'): Promise<void> {
     this.db.prepare(`
-      UPDATE sessions SET status = 'completed', closed_at = ? WHERE id = ?
-    `).run(Date.now(), id);
+      UPDATE sessions SET status = ?, closed_at = ? WHERE id = ?
+    `).run(status, Date.now(), id);
     return Promise.resolve();
   }
 
@@ -1406,6 +1408,18 @@ export class SQLiteAdapter implements DatabaseAdapter {
       'SELECT session_id FROM assessment_link_uses WHERE link_id = ?',
     ).get(linkId) as { session_id: string } | undefined;
     return Promise.resolve(row?.session_id ?? null);
+  }
+
+  deleteAssessmentLink(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM assessment_links WHERE id = ?').run(id);
+    return Promise.resolve(result.changes > 0);
+  }
+
+  deleteAssessmentLinks(ids: string[]): Promise<number> {
+    if (ids.length === 0) return Promise.resolve(0);
+    const placeholders = ids.map(() => '?').join(', ');
+    const result = this.db.prepare(`DELETE FROM assessment_links WHERE id IN (${placeholders})`).run(...ids);
+    return Promise.resolve(result.changes);
   }
 }
 
@@ -1809,11 +1823,11 @@ export class PostgresAdapter implements DatabaseAdapter {
     return this.getBranchMessages(sessionId, branch.id);
   }
 
-  async closeSession(id: string): Promise<void> {
+  async closeSession(id: string, status: Exclude<SessionStatus, 'active'> = 'completed'): Promise<void> {
     await this.initialize();
     await this.pool.query(
-      `UPDATE sessions SET status = 'completed', closed_at = $1 WHERE id = $2`,
-      [Date.now(), id],
+      `UPDATE sessions SET status = $1, closed_at = $2 WHERE id = $3`,
+      [status, Date.now(), id],
     );
   }
 
@@ -2182,6 +2196,23 @@ export class PostgresAdapter implements DatabaseAdapter {
       [linkId],
     );
     return result.rows[0]?.session_id ?? null;
+  }
+
+  async deleteAssessmentLink(id: string): Promise<boolean> {
+    await this.initialize();
+    const result = await this.pool.query('DELETE FROM assessment_links WHERE id = $1', [id]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async deleteAssessmentLinks(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    await this.initialize();
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+    const result = await this.pool.query(
+      `DELETE FROM assessment_links WHERE id IN (${placeholders})`,
+      ids,
+    );
+    return result.rowCount ?? 0;
   }
 
   private async bootstrapSchema(): Promise<void> {

@@ -208,6 +208,14 @@ describe('closeSession', () => {
     expect(session!.closed_at).toBeGreaterThanOrEqual(before);
     expect(session!.closed_at).toBeLessThanOrEqual(after);
   });
+
+  test('can set status to expired', async () => {
+    const db = makeAdapter();
+    const { id } = await db.createSession(BASE_CONFIG);
+    await db.closeSession(id, 'expired');
+    const session = await db.getSession(id);
+    expect(session!.status).toBe('expired');
+  });
 });
 
 describe('listSessions', () => {
@@ -351,6 +359,46 @@ describe('assessment link persistence', () => {
       },
       consumed_session_id: session.id,
     });
+  });
+});
+
+describe('assessment link deletion', () => {
+  test('deleteAssessmentLink removes the link and returns true', async () => {
+    const db = makeAdapter();
+    await db.createAssessmentLink({
+      id: 'link-1', token: 'token-1', url: 'http://localhost/assessment?token=token-1',
+      prompt_id: 'library-api', candidate_email: 'alice@example.com',
+      created_at: 1000, expires_at: 2000, constraint: BASE_CONSTRAINT,
+    });
+
+    await expect(db.deleteAssessmentLink('link-1')).resolves.toBe(true);
+    await expect(db.getAssessmentLink('link-1')).resolves.toBeNull();
+  });
+
+  test('deleteAssessmentLink returns false for a nonexistent link', async () => {
+    const db = makeAdapter();
+    await expect(db.deleteAssessmentLink('missing')).resolves.toBe(false);
+  });
+
+  test('deleteAssessmentLinks removes multiple links and returns count', async () => {
+    const db = makeAdapter();
+    for (const id of ['link-1', 'link-2', 'link-3']) {
+      await db.createAssessmentLink({
+        id, token: `token-${id}`, url: `http://localhost/assessment?token=${id}`,
+        prompt_id: 'library-api', candidate_email: 'alice@example.com',
+        created_at: 1000, expires_at: 2000, constraint: BASE_CONSTRAINT,
+      });
+    }
+
+    await expect(db.deleteAssessmentLinks(['link-1', 'link-2'])).resolves.toBe(2);
+    await expect(db.getAssessmentLink('link-1')).resolves.toBeNull();
+    await expect(db.getAssessmentLink('link-2')).resolves.toBeNull();
+    await expect(db.getAssessmentLink('link-3')).resolves.not.toBeNull();
+  });
+
+  test('deleteAssessmentLinks returns 0 for an empty array', async () => {
+    const db = makeAdapter();
+    await expect(db.deleteAssessmentLinks([])).resolves.toBe(0);
   });
 });
 

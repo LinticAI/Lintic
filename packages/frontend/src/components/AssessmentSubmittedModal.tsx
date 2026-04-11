@@ -1,7 +1,7 @@
 import type { SessionSummaryStats } from '../lib/session-persist.js';
 
 interface AssessmentSubmittedModalProps {
-  mode: 'confirm' | 'submitted';
+  mode: 'confirm' | 'submitted' | 'expired';
   promptTitle?: string | null;
   stats?: SessionSummaryStats | null;
   submitting?: boolean;
@@ -50,6 +50,7 @@ export function AssessmentSubmittedModal({
   onDone,
 }: AssessmentSubmittedModalProps) {
   const isConfirm = mode === 'confirm';
+  const isExpired = mode === 'expired';
 
   return (
     <div
@@ -76,19 +77,21 @@ export function AssessmentSubmittedModal({
               id="assessment-modal-title"
               className="text-[26px] font-bold tracking-tight text-white"
             >
-              {isConfirm ? 'Ready to wrap up?' : 'High five! 🙌'}
+              {isConfirm ? 'Ready to wrap up?' : isExpired ? 'Time ran out' : 'High five! 🙌'}
             </h2>
 
             <p className="mt-3 text-[14px] leading-relaxed text-zinc-400 px-2">
               {isConfirm
                 ? `We’ll save your progress${promptTitle ? ` for ${promptTitle}` : ''} and lock it in. No more edits after this!`
-                : `Your assessment is safely tucked away. You did a great job today.`}
+                : isExpired
+                  ? 'The assessment timer ended, so your work was automatically submitted.'
+                  : `Your assessment is safely tucked away. You did a great job today.`}
             </p>
           </div>
 
           {!isConfirm && stats && (
             <div className="mb-8 bg-black/20 rounded-2xl px-5 py-2">
-              <StatRow label="Submitted" value={formatTimestamp(stats.submittedAt)} />
+              <StatRow label={isExpired ? 'Submitted automatically' : 'Submitted'} value={formatTimestamp(stats.submittedAt)} />
               <StatRow label="Time spent" value={formatDuration(stats.timeSpentSeconds)} />
               <StatRow label="Turns used" value={`${stats.interactionsUsed} / ${stats.maxInteractions}`} />
               <StatRow label="Tokens used" value={`${stats.tokensUsed} / ${stats.maxTokens}`} />

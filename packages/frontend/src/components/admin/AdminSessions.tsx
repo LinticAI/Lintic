@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { fetchAdminJson, useAdminKey } from './AdminKeyContext.js';
 import type { AdminAssessmentLinksResponse, AdminAssessmentLinkSummary } from '@lintic/core';
+import { getAssessmentDisplayStatus } from './assessment-status.js';
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -43,7 +44,7 @@ export function AdminSessions({ onNavigate }: AdminSessionsProps) {
 
   useEffect(() => { load(); }, [adminKey]);
 
-  const activeSessions = links.filter((l) => l.status === 'active' || l.consumed_session_id);
+  const activeSessions = links.filter((l) => getAssessmentDisplayStatus(l) === 'in_progress');
 
   return (
     <div className="flex flex-col gap-0 p-5">

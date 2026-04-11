@@ -11,6 +11,7 @@ interface TopBarProps {
   onSubmitTask?: () => void;
   submitDisabled?: boolean;
   submittingTask?: boolean;
+  showAutoSubmitWarning?: boolean;
   taskName?: string;
   deliverables?: string;
 }
@@ -29,6 +30,7 @@ export function TopBar({
   onSubmitTask,
   submitDisabled = false,
   submittingTask = false,
+  showAutoSubmitWarning = false,
   isDark,
   taskName = 'Library Backend Service',
   deliverables = 'PRD + Implementation',
@@ -88,10 +90,18 @@ export function TopBar({
         {/* Time & Submit */}
         <div className="flex shrink-0 items-center gap-4 pr-2 min-[1200px]:gap-10 min-[1200px]:pr-4">
           <div className="flex items-center gap-3">
-          <span className="text-[12px] text-[#555555] font-medium tracking-tight">Time remaining:</span>
+            <span className="text-[12px] text-[#555555] font-medium tracking-tight">Time remaining:</span>
             <span data-testid="timer" className="text-[15px] text-white font-bold tabular-nums">
               {formatTime(secondsRemaining)}
             </span>
+            {showAutoSubmitWarning ? (
+              <span
+                data-testid="auto-submit-warning"
+                className="rounded-full border border-amber-400/20 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold tracking-tight text-amber-200"
+              >
+                Auto-submit at 0:00
+              </span>
+            ) : null}
           </div>
           <button
             type="button"

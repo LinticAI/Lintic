@@ -108,6 +108,12 @@ describe('TopBar', () => {
     expect(screen.getByTestId('submit-task')).toHaveTextContent('Submitting...');
   });
 
+  test('shows the auto-submit warning during the final five minutes', () => {
+    render(<TopBar {...DEFAULT_PROPS} showAutoSubmitWarning />);
+
+    expect(screen.getByTestId('auto-submit-warning')).toHaveTextContent('Auto-submit at 0:00');
+  });
+
   test('allows the header content to wrap on narrower viewports', () => {
     render(<TopBar {...DEFAULT_PROPS} onViewPrompt={() => {}} onSubmitTask={() => undefined} />);
 

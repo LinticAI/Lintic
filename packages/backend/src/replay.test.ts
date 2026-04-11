@@ -598,6 +598,14 @@ class FakeDb implements DatabaseAdapter {
   getAssessmentLinkSessionId(linkId: string): Promise<string | null> {
     return Promise.resolve(this.usedAssessmentLinks.get(linkId) ?? null);
   }
+
+  deleteAssessmentLink(_id: string): Promise<boolean> {
+    return Promise.resolve(false);
+  }
+
+  deleteAssessmentLinks(_ids: string[]): Promise<number> {
+    return Promise.resolve(0);
+  }
 }
 
 // ─── Fake AgentAdapter ────────────────────────────────────────────────────────

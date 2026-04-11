@@ -15,7 +15,7 @@ await adapter.init(config.agent);
 const app = createApp(db, adapter, config, {
   frontendDistPath: resolveFrontendDistPath(),
 });
-const port = 3300;
+const port = Number(process.env.PORT ?? 3300);
 
 app.listen(port, () => {
   console.log(`Lintic backend listening on port ${port}`);

@@ -13,6 +13,8 @@ const {
   mockLoadSession,
   mockSaveSession,
   mockClearSession,
+  mockConstraintState,
+  mockPatchConstraints,
 } = vi.hoisted(() => ({
   mockWriteFile: vi.fn().mockResolvedValue(undefined),
   mockReadFile: vi.fn().mockResolvedValue('# Approved plan'),
@@ -22,6 +24,15 @@ const {
   mockLoadSession: vi.fn().mockReturnValue(null),
   mockSaveSession: vi.fn(),
   mockClearSession: vi.fn(),
+  mockConstraintState: {
+    secondsRemaining: 3600,
+    tokensRemaining: 50000,
+    interactionsRemaining: 30,
+    maxTokens: 50000,
+    maxInteractions: 30,
+    timeLimitSeconds: 3600,
+  },
+  mockPatchConstraints: vi.fn(),
 }));
 
 vi.mock('./components/DevSetup.js', () => ({
@@ -175,15 +186,16 @@ vi.mock('./components/AssessmentSubmittedModal.js', () => ({
     stats,
     submitting,
   }: {
-    mode: 'confirm' | 'submitted';
-    onDone: () => void;
+    mode: 'confirm' | 'submitted' | 'expired';
+    onDone?: () => void;
     onCancel?: () => void;
     onConfirm?: () => void;
     promptTitle?: string | null;
-    stats: { tokensUsed: number; interactionsUsed: number };
+    stats?: { tokensUsed: number; interactionsUsed: number };
     submitting?: boolean;
   }) => (
     <div data-testid={mode === 'confirm' ? 'submit-confirmation-modal' : 'submitted-modal'}>
+      <div data-testid="submitted-mode">{mode}</div>
       <div>{promptTitle}</div>
       {stats ? (
         <>
@@ -220,15 +232,8 @@ vi.mock('./components/AdminLinksDashboard.js', () => ({
 
 vi.mock('./lib/useConstraintTimer.js', () => ({
   useConstraintTimer: () => [
-    {
-      secondsRemaining: 3600,
-      tokensRemaining: 50000,
-      interactionsRemaining: 30,
-      maxTokens: 50000,
-      maxInteractions: 30,
-      timeLimitSeconds: 3600,
-    },
-    vi.fn(),
+    mockConstraintState,
+    mockPatchConstraints,
   ],
 }));
 
@@ -266,6 +271,14 @@ describe('App prompt display', () => {
       }),
     });
     window.history.replaceState({}, '', '/');
+    Object.assign(mockConstraintState, {
+      secondsRemaining: 3600,
+      tokensRemaining: 50000,
+      interactionsRemaining: 30,
+      maxTokens: 50000,
+      maxInteractions: 30,
+      timeLimitSeconds: 3600,
+    });
     mockValidateSession.mockResolvedValue({
       status: 'active',
       stats: {
@@ -427,6 +440,7 @@ describe('App prompt display', () => {
       }],
     }).mockResolvedValueOnce({
       status: 'submitted',
+      submissionKind: 'manual',
       stats: {
         tokensUsed: 1200,
         maxTokens: 50000,
@@ -457,8 +471,75 @@ describe('App prompt display', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('submitted-modal')).toBeInTheDocument();
+      expect(screen.getByTestId('submitted-mode')).toHaveTextContent('submitted');
       expect(screen.queryByTestId('review-dashboard')).not.toBeInTheDocument();
       expect(window.location.pathname).toBe('/');
+    });
+  });
+
+  test('auto-submits and shows the expired modal when time has run out', async () => {
+    Object.assign(mockConstraintState, {
+      secondsRemaining: 0,
+    });
+    mockValidateSession.mockResolvedValueOnce({
+      status: 'active',
+      stats: {
+        tokensUsed: 0,
+        maxTokens: 50000,
+        interactionsUsed: 0,
+        maxInteractions: 30,
+        startedAt: 1000,
+        timeSpentSeconds: 0,
+      },
+      constraints: {
+        tokensRemaining: 50000,
+        interactionsRemaining: 30,
+        secondsRemaining: 0,
+        maxTokens: 50000,
+        maxInteractions: 30,
+        timeLimitSeconds: 3600,
+      },
+      branch: {
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      },
+      branches: [{
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      }],
+    }).mockResolvedValueOnce({
+      status: 'submitted',
+      submissionKind: 'expired',
+      stats: {
+        tokensUsed: 1200,
+        maxTokens: 50000,
+        interactionsUsed: 7,
+        maxInteractions: 30,
+        startedAt: 1000,
+        submittedAt: 61000,
+        timeSpentSeconds: 60,
+      },
+      branch: {
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      },
+      branches: [{
+        id: 'main',
+        name: 'main',
+        created_at: 1000,
+      }],
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId('mock-start-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('submitted-modal')).toBeInTheDocument();
+      expect(screen.getByTestId('submitted-mode')).toHaveTextContent('expired');
     });
   });
 
@@ -501,6 +582,7 @@ describe('App prompt display', () => {
     });
     mockValidateSession.mockResolvedValue({
       status: 'submitted',
+      submissionKind: 'manual',
       stats: {
         tokensUsed: 2000,
         maxTokens: 50000,

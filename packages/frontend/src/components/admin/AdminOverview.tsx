@@ -70,6 +70,7 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
 
   const notOpened = links.filter((l) => getAssessmentDisplayStatus(l) === 'not_opened').length;
   const submitted = links.filter((l) => getAssessmentDisplayStatus(l) === 'submitted').length;
+  const expired = links.filter((l) => getAssessmentDisplayStatus(l) === 'expired').length;
   const today = links.filter((l) => {
     const d = new Date(l.created_at);
     const now = new Date();
@@ -101,9 +102,10 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
   return (
     <div className="flex flex-col gap-5 p-5">
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard label="Not Opened" value={loading ? '—' : notOpened} icon={Link2} accent="var(--color-brand)" />
         <StatCard label="Submitted" value={loading ? '—' : submitted} icon={CheckCircle2} accent="var(--color-status-success)" />
+        <StatCard label="Expired" value={loading ? '—' : expired} icon={Clock} accent="var(--color-status-warning)" />
         <StatCard label="Created Today" value={loading ? '—' : today} icon={Clock} />
         <StatCard label="Total Assessments" value={loading ? '—' : links.length} icon={Activity} />
       </div>

@@ -58,6 +58,7 @@ export type SessionValidationResult =
     }
   | {
       status: 'submitted';
+      submissionKind: 'manual' | 'expired';
       stats: SessionSummaryStats;
       agent?: AgentSummary;
       branch?: PersistedBranchSummary | null;
@@ -162,6 +163,18 @@ export async function validateSession(
     if (data.session.status === 'completed') {
       return {
         status: 'submitted',
+        submissionKind: 'manual',
+        stats,
+        ...(data.agent ? { agent: data.agent } : {}),
+        ...(data.branch ? { branch: data.branch } : {}),
+        ...(data.branches ? { branches: data.branches } : {}),
+      };
+    }
+
+    if (data.session.status === 'expired') {
+      return {
+        status: 'submitted',
+        submissionKind: 'expired',
         stats,
         ...(data.agent ? { agent: data.agent } : {}),
         ...(data.branch ? { branch: data.branch } : {}),

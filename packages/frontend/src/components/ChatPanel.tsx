@@ -168,6 +168,7 @@ interface ChatPanelProps {
   onLoadingChange?: (loading: boolean) => void;
   mode?: AgentMode;
   onModeChange?: (mode: AgentMode) => void;
+  timeExpired?: boolean;
   latestPlanPath?: string | null;
   onPlanGenerated?: (path: string) => void;
   onApprovePlan?: (path: string) => Promise<string>;
@@ -349,6 +350,7 @@ export function ChatPanel({
   onLoadingChange,
   mode = 'build',
   onModeChange,
+  timeExpired = false,
   latestPlanPath,
   onPlanGenerated,
   onApprovePlan,
@@ -385,7 +387,9 @@ export function ChatPanel({
   const [priorConversationCandidates, setPriorConversationCandidates] = useState<ContextCandidateConversation[]>([]);
 
   const exhausted =
-    constraints.interactionsRemaining <= 0 || constraints.tokensRemaining <= 0;
+    timeExpired
+    || constraints.interactionsRemaining <= 0
+    || constraints.tokensRemaining <= 0;
 
   useEffect(() => {
     onLoadingChange?.(loading);
@@ -1205,8 +1209,10 @@ export function ChatPanel({
               fontFamily: 'inherit',
             }}
             placeholder={
-              exhausted
-                ? 'Constraints exhausted'
+              timeExpired
+                ? 'Time is up — your assessment is being submitted.'
+                : exhausted
+                  ? 'Constraints exhausted'
                 : mode === 'plan'
                   ? 'Ask the agent to inspect the repo and write a plan...'
                   : 'Tell the agent what to build...'

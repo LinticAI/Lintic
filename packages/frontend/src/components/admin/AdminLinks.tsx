@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { ChevronDown, ChevronUp, Copy, Eye, Plus, RefreshCw, X } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Check, ChevronDown, ChevronUp, Copy, Eye, Minus, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { fetchAdminJson, copyText, useAdminKey } from './AdminKeyContext.js';
 import type {
   AdminAssessmentLinkDetail,
@@ -35,6 +35,47 @@ function relativeTime(ts: number): string {
   return `${d}d ago`;
 }
 
+interface CheckboxProps {
+  checked: boolean;
+  indeterminate?: boolean;
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onMouseDown?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  'data-testid'?: string;
+}
+
+function Checkbox({ checked, indeterminate = false, onClick, onMouseDown, 'data-testid': testId }: CheckboxProps) {
+  const active = checked || indeterminate;
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={indeterminate ? 'mixed' : checked}
+      data-testid={testId}
+      onClick={onClick}
+      onMouseDown={onMouseDown}
+      className="group flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] transition-all duration-100"
+      style={{
+        background: active ? 'var(--color-brand)' : 'rgba(255,255,255,0.04)',
+        border: `1.5px solid ${active ? 'var(--color-brand)' : 'rgba(255,255,255,0.18)'}`,
+        outline: 'none',
+        boxShadow: active ? '0 0 0 2px rgba(56,135,206,0.18)' : undefined,
+      }}
+      onMouseEnter={(e) => {
+        if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(255,255,255,0.38)';
+      }}
+      onMouseLeave={(e) => {
+        if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(255,255,255,0.18)';
+      }}
+    >
+      {indeterminate
+        ? <Minus size={8} strokeWidth={3} color="white" />
+        : checked
+          ? <Check size={8} strokeWidth={3} color="white" />
+          : null}
+    </button>
+  );
+}
+
 interface AdminLinksProps {
   onNavigate: (section: string, id?: string) => void;
 }
@@ -62,6 +103,18 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
     time_limit_minutes: '',
   });
   const [creating, setCreating] = useState(false);
+
+  // Selection
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+
+  // Drag / shift-click refs
+  const isMouseDownRef = useRef(false);
+  const isDraggingRef = useRef(false);
+  const dragStartIndexRef = useRef<number | null>(null);
+  const dragBaseSelectionRef = useRef<Set<string>>(new Set());
+  const dragModeRef = useRef<'add' | 'remove'>('add');
+  const lastClickIndexRef = useRef<number | null>(null);
 
   // Detail panel
   const [selectedLink, setSelectedLink] = useState<AdminAssessmentLinkDetail | null>(null);
@@ -146,6 +199,104 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
     }
   }
 
+  async function handleDelete(ids: string[]) {
+    if (ids.length === 0) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      if (ids.length === 1) {
+        await fetchAdminJson(`/api/links/${ids[0]}`, adminKey, { method: 'DELETE' });
+      } else {
+        await fetchAdminJson('/api/links', adminKey, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        });
+      }
+      setSelected(new Set());
+      if (selectedLink && ids.includes(selectedLink.id)) setSelectedLink(null);
+      showToast(`Deleted ${ids.length} assessment${ids.length > 1 ? 's' : ''}.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  function toggleSelectAll() {
+    if (selected.size === links.length && links.length > 0) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(links.map((l) => l.id)));
+    }
+  }
+
+  // Called on mousedown on a row's checkbox — starts drag tracking
+  function handleCheckboxMouseDown(index: number, e: React.MouseEvent) {
+    e.preventDefault(); // prevent text selection while dragging
+    isMouseDownRef.current = true;
+    isDraggingRef.current = false;
+    dragStartIndexRef.current = index;
+    dragBaseSelectionRef.current = new Set(selected);
+    dragModeRef.current = (links[index] && selected.has(links[index].id)) ? 'remove' : 'add';
+  }
+
+  // Called on click (after mouseup without drag) on a row's checkbox
+  function handleCheckboxClick(index: number, e: React.MouseEvent) {
+    if (isDraggingRef.current) return; // drag already committed the selection
+    const id = links[index]?.id;
+    if (!id) return;
+    if (e.shiftKey && lastClickIndexRef.current !== null) {
+      const start = Math.min(lastClickIndexRef.current, index);
+      const end = Math.max(lastClickIndexRef.current, index);
+      // Determine intent: if current item is unselected, add; otherwise remove
+      const adding = !selected.has(id);
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (let i = start; i <= end; i++) {
+          const lid = links[i]?.id;
+          if (lid) { if (adding) next.add(lid); else next.delete(lid); }
+        }
+        return next;
+      });
+    } else {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+      lastClickIndexRef.current = index;
+    }
+  }
+
+  // Called on mouseenter on a row while mouse is held down — extends drag
+  function handleRowMouseEnter(index: number) {
+    if (!isMouseDownRef.current || dragStartIndexRef.current === null) return;
+    isDraggingRef.current = true;
+    const start = Math.min(dragStartIndexRef.current, index);
+    const end = Math.max(dragStartIndexRef.current, index);
+    setSelected(() => {
+      const next = new Set(dragBaseSelectionRef.current);
+      for (let i = start; i <= end; i++) {
+        const lid = links[i]?.id;
+        if (lid) { if (dragModeRef.current === 'remove') next.delete(lid); else next.add(lid); }
+      }
+      return next;
+    });
+  }
+
+  // Global mouseup ends any active drag
+  useEffect(() => {
+    function handleMouseUp() {
+      isMouseDownRef.current = false;
+      // Delay reset so onClick can still read isDraggingRef
+      window.setTimeout(() => { isDraggingRef.current = false; }, 0);
+    }
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, []);
+
   const inputClass = 'w-full rounded-xl bg-[var(--color-bg-app)]/50 px-3 py-1.5 text-[12px] outline-none focus:ring-1 focus:ring-[var(--color-brand)] transition-all';
   const inputStyle = { color: 'var(--color-text-main)' };
 
@@ -165,6 +316,19 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {selected.size > 0 ? (
+            <button
+              type="button"
+              data-testid="admin-links-delete-selected"
+              onClick={() => void handleDelete([...selected])}
+              disabled={deleting}
+              className="flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[11px] font-medium disabled:opacity-40"
+              style={{ color: 'var(--color-status-error)', background: 'rgba(239,68,68,0.08)' }}
+            >
+              <Trash2 size={10} />
+              Delete {selected.size}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => void load()}
@@ -334,6 +498,14 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
               <table className="min-w-full text-left text-[12px]">
                 <thead>
                   <tr>
+                    <th className="px-4 py-3">
+                      <Checkbox
+                        data-testid="admin-links-select-all"
+                        checked={links.length > 0 && selected.size === links.length}
+                        indeterminate={selected.size > 0 && selected.size < links.length}
+                        onClick={toggleSelectAll}
+                      />
+                    </th>
                     {['Prompt', 'Candidate', 'Status', 'Created', 'Expires', 'Session', 'Actions'].map((col, i) => (
                       <th
                         key={i}
@@ -346,18 +518,33 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-transparent">
-                  {links.map((link) => (
+                  {links.map((link, rowIndex) => (
                     (() => {
                       const displayStatus = getAssessmentDisplayStatus(link);
                       return (
                         <tr
                           key={link.id}
                           data-testid={`admin-link-row-${link.id}`}
-                          className="hover:bg-[var(--color-bg-app)]/50 transition-colors even:bg-[var(--color-bg-app)]/20"
+                          className="transition-colors even:bg-[var(--color-bg-app)]/20"
+                          onMouseEnter={() => handleRowMouseEnter(rowIndex)}
+                          onMouseDown={(e) => handleCheckboxMouseDown(rowIndex, e)}
+                          onClick={(e) => handleCheckboxClick(rowIndex, e)}
                           style={{
-                            background: selectedLink?.id === link.id ? 'rgba(56,135,206,0.08)' : undefined,
+                            background: selected.has(link.id)
+                              ? 'rgba(56,135,206,0.07)'
+                              : selectedLink?.id === link.id
+                                ? 'rgba(56,135,206,0.08)'
+                                : undefined,
+                            cursor: 'pointer',
+                            userSelect: 'none',
                           }}
                         >
+                          <td className="px-4 py-2">
+                            <Checkbox
+                              data-testid={`admin-link-select-${link.id}`}
+                              checked={selected.has(link.id)}
+                            />
+                          </td>
                           <td className="px-4 py-2">
                             <div style={{ color: 'var(--color-text-main)' }}>{link.prompt?.title ?? link.prompt_id}</div>
                             <div className="font-mono text-[10px]" style={{ color: 'var(--color-text-dimmest)' }}>
@@ -390,7 +577,7 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
                                 type="button"
                                 className="underline transition-colors"
                                 style={{ color: 'var(--color-brand)' }}
-                                onClick={() => onNavigate('reviews', link.consumed_session_id!)}
+                                onClick={(e) => { e.stopPropagation(); onNavigate('reviews', link.consumed_session_id!); }}
                               >
                                 {link.consumed_session_id.slice(0, 8)}…
                               </button>
@@ -398,7 +585,7 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
                               <span style={{ color: 'var(--color-text-dimmest)' }}>—</span>
                             )}
                           </td>
-                          <td className="px-4 py-2">
+                          <td className="px-4 py-2" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
@@ -423,6 +610,19 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
                               >
                                 <Copy size={12} />
                               </button>
+                              <button
+                                data-testid={`admin-link-delete-${link.id}`}
+                                type="button"
+                                onClick={() => void handleDelete([link.id])}
+                                disabled={deleting}
+                                className="flex h-6 w-6 items-center justify-center rounded-xl transition-colors disabled:opacity-40"
+                                style={{ color: 'var(--color-text-dim)' }}
+                                title="Delete"
+                                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-status-error)'; (e.currentTarget as HTMLButtonElement).style.background = 'rgba(239,68,68,0.08)'; }}
+                                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--color-text-dim)'; (e.currentTarget as HTMLButtonElement).style.background = ''; }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -431,7 +631,7 @@ export function AdminAssessments({ onNavigate }: AdminLinksProps) {
                   ))}
                   {!loading && links.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-[12px]" style={{ color: 'var(--color-text-dim)' }}>
+                      <td colSpan={8} className="px-4 py-8 text-center text-[12px]" style={{ color: 'var(--color-text-dim)' }}>
                         No assessments created yet.
                       </td>
                     </tr>

@@ -7,6 +7,8 @@ cd "$ROOT_DIR"
 
 backend_pid=""
 frontend_pid=""
+backend_port="${1:-3300}"
+frontend_port="${2:-5173}"
 
 port_in_use() {
   local port="$1"
@@ -34,24 +36,27 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-if port_in_use 3300; then
-  echo "Cannot start backend: port 3300 is already in use."
-  print_port_owner 3300
+if port_in_use "$backend_port"; then
+  echo "Cannot start backend: port ${backend_port} is already in use."
+  print_port_owner "$backend_port"
   exit 1
 fi
 
-if port_in_use 5173; then
-  echo "Cannot start frontend: port 5173 is already in use."
-  print_port_owner 5173
+if port_in_use "$frontend_port"; then
+  echo "Cannot start frontend: port ${frontend_port} is already in use."
+  print_port_owner "$frontend_port"
   exit 1
 fi
 
-echo "Starting backend on http://localhost:3300"
-PORT=3300 npm run dev --workspace @lintic/backend &
+echo "Building @lintic/core..."
+npm run build --workspace @lintic/core
+
+echo "Starting backend on http://localhost:${backend_port}"
+PORT="$backend_port" npm run dev --workspace @lintic/backend &
 backend_pid=$!
 
-echo "Starting frontend on http://localhost:5173"
-npm run dev --workspace @lintic/frontend -- --host localhost --port 5173 --strictPort &
+echo "Starting frontend on http://localhost:${frontend_port} (proxying /api to backend port ${backend_port})"
+VITE_BACKEND_PORT="$backend_port" npm run dev --workspace @lintic/frontend -- --host localhost --port "$frontend_port" --strictPort &
 frontend_pid=$!
 
 while true; do

@@ -43,6 +43,7 @@ import type { PromptSummary } from '@lintic/core';
 import { AssessmentSubmittedModal } from './components/AssessmentSubmittedModal.js';
 
 type AppState = 'setup' | 'active' | 'submitted';
+type SubmissionKind = 'manual' | 'expired';
 const ENABLE_DEV_REVIEW_SHORTCUT = import.meta.env.DEV;
 
 function getAssessmentLinkToken(location: Location): string | null {
@@ -91,9 +92,11 @@ export function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [submittingTask, setSubmittingTask] = useState(false);
   const [submittedStats, setSubmittedStats] = useState<SessionSummaryStats | null>(null);
+  const [submissionKind, setSubmissionKind] = useState<SubmissionKind>('manual');
   const [submitConfirmationOpen, setSubmitConfirmationOpen] = useState(false);
   const [bootstrappingSession, setBootstrappingSession] = useState(false);
   const snapshotTimerRef = useRef<number | null>(null);
+  const autoSubmittingDueToTimeoutRef = useRef(false);
   const hasAttemptedSavedSessionRestoreRef = useRef(false);
   const latestConsumedAssessmentSessionRef = useRef<string | null>(null);
   const restoringBranchIdRef = useRef<string | null>(null);
@@ -224,11 +227,13 @@ export function App() {
       setSubmitConfirmationOpen(false);
       if (validation.status === 'submitted') {
         setSubmittedStats(validation.stats);
+        setSubmissionKind(validation.submissionKind);
         setBootstrappingSession(false);
         setAppState('submitted');
         return;
       }
       patchConstraints(validation.constraints);
+      setSubmissionKind('manual');
       setSubmittedStats(null);
       setAppState('active');
       void restoreFiles(
@@ -259,6 +264,7 @@ export function App() {
     setActiveBranchId(optimisticBranch.id);
     setLatestPlanPath(null);
     setActiveWorkspaceSection('code');
+    setSubmissionKind('manual');
     setSubmittedStats(null);
     setSubmitConfirmationOpen(false);
     setAppState('active');
@@ -278,10 +284,12 @@ export function App() {
       setActiveBranchId(nextBranchId);
       if (validation.status === 'submitted') {
         setSubmittedStats(validation.stats);
+        setSubmissionKind(validation.submissionKind);
         setAppState('submitted');
         return;
       }
       patchConstraints(validation.constraints);
+      setSubmissionKind('manual');
       setSubmittedStats(null);
       void restoreFiles(session.sessionId, session.sessionToken, nextBranchId ?? undefined).then(applyRestoredWorkspaceState);
     });
@@ -493,13 +501,13 @@ export function App() {
   }, []);
 
   const handleOpenSubmitConfirmation = useCallback(() => {
-    if (!sessionId || chatLoading || submittingTask || appState !== 'active') {
+    if (!sessionId || chatLoading || submittingTask || appState !== 'active' || constraints.secondsRemaining <= 0) {
       return;
     }
     setSubmitConfirmationOpen(true);
-  }, [appState, chatLoading, sessionId, submittingTask]);
+  }, [appState, chatLoading, constraints.secondsRemaining, sessionId, submittingTask]);
 
-  const handleSubmitTask = useCallback(async () => {
+  const submitAssessment = useCallback(async (kind: SubmissionKind) => {
     if (!sessionId || !sessionToken || chatLoading || submittingTask) {
       return;
     }
@@ -530,15 +538,44 @@ export function App() {
 
       setSubmitConfirmationOpen(false);
       setSubmittedStats(validation.stats);
+      setSubmissionKind(validation.submissionKind);
       setAppState('submitted');
     } catch (error) {
       addToast(
-        error instanceof Error ? `Failed to submit task: ${error.message}` : 'Failed to submit task',
+        error instanceof Error
+          ? `${kind === 'expired' ? 'Failed to auto-submit expired assessment' : 'Failed to submit task'}: ${error.message}`
+          : kind === 'expired'
+            ? 'Failed to auto-submit expired assessment'
+            : 'Failed to submit task',
       );
     } finally {
       setSubmittingTask(false);
+      autoSubmittingDueToTimeoutRef.current = false;
     }
   }, [addToast, chatLoading, sessionId, sessionToken, submittingTask]);
+
+  useEffect(() => {
+    if (
+      appState !== 'active'
+      || !sessionId
+      || !sessionToken
+      || constraints.secondsRemaining > 0
+      || submittingTask
+      || autoSubmittingDueToTimeoutRef.current
+    ) {
+      return;
+    }
+
+    autoSubmittingDueToTimeoutRef.current = true;
+    void submitAssessment('expired');
+  }, [
+    appState,
+    constraints.secondsRemaining,
+    sessionId,
+    sessionToken,
+    submitAssessment,
+    submittingTask,
+  ]);
 
   if (reviewSessionId) {
     return (
@@ -582,31 +619,33 @@ export function App() {
           window.history.replaceState({}, '', '/');
           setBootstrappingSession(true);
           void validateSession(nextSessionId, nextSessionToken).then((validation) => {
-            if (!validation) {
-              clearSession();
-              setSessionId(null);
-              setSessionToken(undefined);
-              setActivePrompt(null);
-              setAgentSummary(null);
-              setBootstrappingSession(false);
-              setAppState('setup');
-              return;
-            }
-            if (validation.status === 'submitted') {
-              setAgentSummary(validation.agent ?? null);
-              setBranches(validation.branches ?? (validation.branch ? [validation.branch] : []));
-              setActiveBranchId(validation.branch?.id ?? validation.branches?.[0]?.id ?? null);
-              setSubmittedStats(validation.stats);
-              setBootstrappingSession(false);
-              setAppState('submitted');
-              return;
-            }
+          if (!validation) {
+            clearSession();
+            setSessionId(null);
+            setSessionToken(undefined);
+            setActivePrompt(null);
+            setAgentSummary(null);
+            setBootstrappingSession(false);
+            setAppState('setup');
+            return;
+          }
+          if (validation.status === 'submitted') {
             setAgentSummary(validation.agent ?? null);
             setBranches(validation.branches ?? (validation.branch ? [validation.branch] : []));
             setActiveBranchId(validation.branch?.id ?? validation.branches?.[0]?.id ?? null);
-            patchConstraints(validation.constraints);
-            setSubmittedStats(null);
-            setAppState('active');
+            setSubmittedStats(validation.stats);
+            setSubmissionKind(validation.submissionKind);
+            setBootstrappingSession(false);
+            setAppState('submitted');
+            return;
+          }
+          setAgentSummary(validation.agent ?? null);
+          setBranches(validation.branches ?? (validation.branch ? [validation.branch] : []));
+          setActiveBranchId(validation.branch?.id ?? validation.branches?.[0]?.id ?? null);
+          patchConstraints(validation.constraints);
+          setSubmissionKind('manual');
+          setSubmittedStats(null);
+          setAppState('active');
             void restoreFiles(
               nextSessionId,
               nextSessionToken,
@@ -669,8 +708,9 @@ export function App() {
         onViewPrompt={activePrompt ? handleViewPrompt : undefined}
         onOpenReviewDebug={ENABLE_DEV_REVIEW_SHORTCUT && sessionId ? handleOpenReviewDebug : undefined}
         onSubmitTask={sessionId ? handleOpenSubmitConfirmation : undefined}
-        submitDisabled={!sessionId || chatLoading || submittingTask}
+        submitDisabled={!sessionId || chatLoading || submittingTask || constraints.secondsRemaining <= 0}
         submittingTask={submittingTask}
+        showAutoSubmitWarning={constraints.secondsRemaining > 0 && constraints.secondsRemaining <= 300}
       />
 
       <div className="flex min-h-0 min-w-0 flex-1 gap-[5px]">
@@ -708,6 +748,7 @@ export function App() {
                 modelLabel={agentSummary?.model}
                 mode={agentMode}
                 onModeChange={setAgentMode}
+                timeExpired={constraints.secondsRemaining <= 0}
                 latestPlanPath={latestPlanPath}
                 onPlanGenerated={handlePlanGenerated}
                 onApprovePlan={handleApprovePlan}
@@ -757,12 +798,12 @@ export function App() {
               setSubmitConfirmationOpen(false);
             }
           }}
-          onConfirm={() => void handleSubmitTask()}
+          onConfirm={() => void submitAssessment('manual')}
         />
       ) : null}
       {appState === 'submitted' && submittedStats ? (
         <AssessmentSubmittedModal
-          mode="submitted"
+          mode={submissionKind === 'expired' ? 'expired' : 'submitted'}
           promptTitle={activePrompt?.title ?? null}
           stats={submittedStats}
           onDone={() => {
@@ -771,6 +812,7 @@ export function App() {
             setSessionToken(undefined);
             setAgentConfig(undefined);
             setActivePrompt(null);
+            setSubmissionKind('manual');
             setSubmittedStats(null);
             setSubmitConfirmationOpen(false);
             setAppState('setup');
