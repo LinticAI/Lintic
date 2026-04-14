@@ -48,9 +48,11 @@ function sseAgentDone(
   content: string,
   tokensRemaining = 49000,
   interactionsRemaining = 29,
+  thinking?: string,
 ) {
   return {
     content,
+    ...(thinking !== undefined ? { thinking } : {}),
     stop_reason: 'end_turn',
     tool_actions: [],
     usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
@@ -339,6 +341,27 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(screen.queryByTestId('loading-spinner')).not.toBeInTheDocument());
   });
 
+  test('shows a thinking word instead of the old dot loader', async () => {
+    let resolvePost!: (value: Response) => void;
+    const postPromise = new Promise<Response>((res) => { resolvePost = res; });
+
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(historyResponse)
+      .mockReturnValueOnce(postPromise);
+
+    render(<ChatPanel sessionId="s1" constraints={defaultConstraints} />);
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => expect(screen.getByTestId('thinking-status-word')).toBeInTheDocument());
+
+    await act(async () => {
+      resolvePost(makeSSEResponse([{ event: 'done', data: sseAgentDone('done') }]));
+    });
+  });
+
   test('renders agent response as HTML (markdown)', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(historyResponse)
@@ -355,6 +378,60 @@ describe('ChatPanel', () => {
       expect(agentBubbles.length).toBeGreaterThan(0);
       expect(agentBubbles[0]!.innerHTML).toBe('<p>**bold text**</p>');
     });
+  });
+
+  test('shows a Thinking tab when the model returns thinking content', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(historyResponse)
+      .mockResolvedValueOnce(
+        makeSSEResponse([{ event: 'done', data: sseAgentDone('Final answer', 49000, 29, 'Reasoning summary') }]),
+      );
+
+    render(
+      <ChatPanel
+        sessionId="s1"
+        constraints={defaultConstraints}
+        agentConfig={{ provider: 'anthropic-native', api_key: 'test-key', model: 'claude-opus-4-5' }}
+      />,
+    );
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hi' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => expect(screen.getByTestId('assistant-tab-thinking')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('assistant-tab-thinking'));
+    expect(screen.getByTestId('thinking-message')).toHaveTextContent('Reasoning summary');
+  });
+
+  test('parses persisted thinking payloads from history', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        messages: [{
+          id: 'm1',
+          role: 'assistant',
+          content: JSON.stringify({
+            __type: 'assistant_response',
+            content: 'Saved answer',
+            thinking: 'Saved reasoning',
+          }),
+          created_at: new Date().toISOString(),
+        }],
+      }),
+    } as unknown as Response);
+
+    render(
+      <ChatPanel
+        sessionId="s1"
+        constraints={defaultConstraints}
+        agentConfig={{ provider: 'anthropic-native', api_key: 'test-key', model: 'claude-opus-4-5' }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Saved answer')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('assistant-tab-thinking'));
+    expect(screen.getByTestId('thinking-message')).toHaveTextContent('Saved reasoning');
   });
 
   test('constrains rendered markdown bubbles so wide code blocks do not expand the pane', async () => {

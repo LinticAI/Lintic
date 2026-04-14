@@ -1,6 +1,6 @@
 import type { AgentAdapter, AgentResponse, Message, SessionContext, ToolCall, ToolResult, TokenUsage } from '@lintic/core';
 
-export type ToolRunner = (calls: ToolCall[], description: string | null) => Promise<ToolResult[]>;
+export type ToolRunner = (calls: ToolCall[], description: string | null, thinking: string | null) => Promise<ToolResult[]>;
 
 export type LoopEvent =
   | { type: 'tool_action'; data: ToolAction }
@@ -8,6 +8,7 @@ export type LoopEvent =
 
 export interface ToolAction {
   description: string | null;
+  thinking: string | null;
   tool_calls: ToolCall[];
   tool_results: ToolResult[];
 }
@@ -16,6 +17,7 @@ export type AgentLoopStopReason = 'end_turn' | 'max_tokens' | 'tool_limit';
 
 export interface AgentLoopResult {
   content: string | null;
+  thinking: string | null;
   tool_actions: ToolAction[];
   total_usage: TokenUsage;
   stop_reason: AgentLoopStopReason;
@@ -61,6 +63,7 @@ export async function runAgentLoop(
     if (toolCallsUsed + calls.length > MAX_TOOL_CALLS) {
       const limitResult: AgentLoopResult = {
         content: null,
+        thinking: null,
         tool_actions,
         total_usage,
         stop_reason: 'tool_limit',
@@ -71,9 +74,10 @@ export async function runAgentLoop(
     toolCallsUsed += calls.length;
 
     // Execute tools via the injected runner.
-    const results = await toolRunner(calls, response.content);
+    const results = await toolRunner(calls, response.content, response.thinking ?? null);
     const action: ToolAction = {
       description: response.content,
+      thinking: response.thinking ?? null,
       tool_calls: calls,
       tool_results: results,
     };
@@ -86,7 +90,13 @@ export async function runAgentLoop(
       history.push({ role: 'user', content: message });
       userMessageAddedToHistory = true;
     }
-    history.push({ role: 'assistant', content: response.content, tool_calls: calls });
+    history.push({
+      role: 'assistant',
+      content: response.content,
+      tool_calls: calls,
+      thinking: response.thinking ?? null,
+      ...(response.thinking_blocks ? { thinking_blocks: response.thinking_blocks } : {}),
+    });
     history.push({ role: 'tool', content: null, tool_results: results });
 
     // Continuation call — history already ends with tool results; pass null message.
@@ -96,6 +106,7 @@ export async function runAgentLoop(
 
   const result: AgentLoopResult = {
     content: response.content,
+    thinking: response.thinking ?? null,
     tool_actions,
     total_usage,
     stop_reason: response.stop_reason === 'max_tokens' ? 'max_tokens' : 'end_turn',

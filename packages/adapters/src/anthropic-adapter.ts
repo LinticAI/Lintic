@@ -5,6 +5,7 @@ import type {
   AgentResponse,
   Message,
   SessionContext,
+  ThinkingBlock,
   ToolCall,
   ToolDefinition,
   ToolName,
@@ -20,6 +21,17 @@ interface AnthropicTextBlock {
   text: string;
 }
 
+interface AnthropicThinkingBlock {
+  type: 'thinking';
+  thinking: string;
+  signature: string;
+}
+
+interface AnthropicRedactedThinkingBlock {
+  type: 'redacted_thinking';
+  data: string;
+}
+
 interface AnthropicToolUseBlock {
   type: 'tool_use';
   id: string;
@@ -33,7 +45,12 @@ interface AnthropicToolResultBlock {
   content: string;
 }
 
-type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock | AnthropicToolResultBlock;
+type AnthropicContentBlock =
+  | AnthropicTextBlock
+  | AnthropicThinkingBlock
+  | AnthropicRedactedThinkingBlock
+  | AnthropicToolUseBlock
+  | AnthropicToolResultBlock;
 
 interface AnthropicMessage {
   role: 'user' | 'assistant';
@@ -86,12 +103,15 @@ export class AnthropicAdapter implements AgentAdapter {
     const systemPrompt = systemMessages.map(m => m.content).filter(Boolean).join('\n\n');
 
     const MAX_OUTPUT_TOKENS = 4096;
+    const maxTokens = Math.min(context.constraints_remaining.tokens_remaining, MAX_OUTPUT_TOKENS);
+    const thinkingConfig = buildThinkingConfig(this.config.model, maxTokens);
     const requestBody = {
       model: this.config.model,
-      max_tokens: Math.min(context.constraints_remaining.tokens_remaining, MAX_OUTPUT_TOKENS),
+      max_tokens: maxTokens,
       messages,
       system: systemPrompt || undefined,
       tools: toAnthropicTools(TOOLS),
+      ...(thinkingConfig ? { thinking: thinkingConfig } : {}),
     };
 
     let response: Response;
@@ -102,6 +122,7 @@ export class AnthropicAdapter implements AgentAdapter {
           'Content-Type': 'application/json',
           'x-api-key': this.config.api_key,
           'anthropic-version': '2023-06-01',
+          ...(thinkingConfig ? { 'anthropic-beta': 'interleaved-thinking-2025-05-14' } : {}),
         },
         body: JSON.stringify(requestBody),
       });
@@ -143,7 +164,8 @@ export class AnthropicAdapter implements AgentAdapter {
       total_tokens: data.usage.input_tokens + data.usage.output_tokens,
     };
 
-    const textBlock = data.content.find((b): b is AnthropicTextBlock => b.type === 'text');
+    const textBlocks = data.content.filter((b): b is AnthropicTextBlock => b.type === 'text');
+    const thinkingBlocks = data.content.filter(isAnthropicThinkingBlock);
     const toolUseBlocks = data.content.filter((b): b is AnthropicToolUseBlock => b.type === 'tool_use');
 
     const toolCalls: ToolCall[] = toolUseBlocks.map(b => ({
@@ -151,11 +173,17 @@ export class AnthropicAdapter implements AgentAdapter {
       name: b.name as ToolName,
       input: b.input,
     }));
+    const thinking = thinkingBlocks
+      .map((block) => block.type === 'thinking' ? block.thinking : '')
+      .filter(Boolean)
+      .join('\n\n') || null;
 
     const agentResponse: AgentResponse = {
-      content: textBlock?.text ?? null,
+      content: textBlocks.map((block) => block.text).join('\n\n') || null,
       usage: this.lastUsage,
       stop_reason: mapStopReason(data.stop_reason),
+      ...(thinking ? { thinking } : {}),
+      ...(thinkingBlocks.length > 0 ? { thinking_blocks: thinkingBlocks.map(toThinkingBlock) } : {}),
     };
     if (toolCalls.length > 0) {
       agentResponse.tool_calls = toolCalls;
@@ -197,6 +225,9 @@ function toAnthropicMessage(msg: Message): AnthropicMessage {
 
   if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
     const blocks: AnthropicContentBlock[] = [];
+    if (msg.thinking_blocks?.length) {
+      blocks.push(...msg.thinking_blocks.map(fromThinkingBlock));
+    }
     if (msg.content) {
       blocks.push({ type: 'text', text: msg.content });
     }
@@ -216,4 +247,63 @@ function mapStopReason(reason: string): AgentResponse['stop_reason'] {
   if (reason === 'tool_use') return 'tool_use';
   if (reason === 'max_tokens') return 'max_tokens';
   return 'end_turn';
+}
+
+function supportsAnthropicThinking(model: string): boolean {
+  return /mythos|claude-.*(?:3-7|4)/i.test(model);
+}
+
+function buildThinkingConfig(model: string, maxTokens: number):
+  | { type: 'enabled'; budget_tokens: number; display: 'summarized' }
+  | undefined {
+  if (!supportsAnthropicThinking(model) || maxTokens < 1025) {
+    return undefined;
+  }
+
+  const budgetTokens = Math.min(2048, maxTokens - 1);
+  if (budgetTokens < 1024) {
+    return undefined;
+  }
+
+  return {
+    type: 'enabled',
+    budget_tokens: budgetTokens,
+    display: 'summarized',
+  };
+}
+
+function isAnthropicThinkingBlock(
+  block: AnthropicContentBlock,
+): block is AnthropicThinkingBlock | AnthropicRedactedThinkingBlock {
+  return block.type === 'thinking' || block.type === 'redacted_thinking';
+}
+
+function toThinkingBlock(block: AnthropicThinkingBlock | AnthropicRedactedThinkingBlock): ThinkingBlock {
+  if (block.type === 'thinking') {
+    return {
+      type: 'thinking',
+      thinking: block.thinking,
+      signature: block.signature,
+    };
+  }
+
+  return {
+    type: 'redacted_thinking',
+    data: block.data,
+  };
+}
+
+function fromThinkingBlock(block: ThinkingBlock): AnthropicThinkingBlock | AnthropicRedactedThinkingBlock {
+  if (block.type === 'redacted_thinking') {
+    return {
+      type: 'redacted_thinking',
+      data: block.data ?? '',
+    };
+  }
+
+  return {
+    type: 'thinking',
+    thinking: block.thinking ?? '',
+    signature: block.signature ?? '',
+  };
 }

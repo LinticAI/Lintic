@@ -67,6 +67,13 @@ export interface ToolResult {
   is_error: boolean;
 }
 
+export interface ThinkingBlock {
+  type: 'thinking' | 'redacted_thinking';
+  thinking?: string;
+  signature?: string;
+  data?: string;
+}
+
 // ─── Messages and Conversation History ───────────────────────────────────────
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
@@ -76,6 +83,8 @@ export interface Message {
   content: string | null; // null when assistant turn contains only tool_calls
   tool_calls?: ToolCall[];     // set when role='assistant' and LLM called tools
   tool_results?: ToolResult[]; // set when role='tool'
+  thinking?: string | null;
+  thinking_blocks?: ThinkingBlock[];
 }
 
 export interface SessionContext {
@@ -99,6 +108,8 @@ export interface AgentResponse {
   tool_calls?: ToolCall[];
   usage: TokenUsage;
   stop_reason: StopReason;
+  thinking?: string | null;
+  thinking_blocks?: ThinkingBlock[];
 }
 
 export interface AgentCapabilities {

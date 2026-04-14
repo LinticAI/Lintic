@@ -24,6 +24,7 @@ import type {
   SessionBranch,
   SessionStatus,
   SnapshotFile,
+  ThinkingBlock,
   WorkspaceSection,
   WorkspaceSnapshotKind,
   MockPgPoolExport,
@@ -57,9 +58,15 @@ function buildHistory(storedMessages: StoredMessage[]): Message[] {
   return storedMessages.map((m) => {
     if (m.role === 'assistant') {
       try {
-        const parsed = JSON.parse(m.content) as { __type?: string; content: string | null; tool_calls: ToolCall[] };
-        if (parsed.__type === 'tool_use') {
-          return { role: 'assistant', content: parsed.content, tool_calls: parsed.tool_calls };
+        const parsed = parseAssistantPayload(m.content);
+        if (parsed) {
+          return {
+            role: 'assistant',
+            content: parsed.content,
+            ...(parsed.__type === 'tool_use' ? { tool_calls: parsed.tool_calls } : {}),
+            ...(parsed.thinking !== undefined ? { thinking: parsed.thinking } : {}),
+            ...(parsed.thinking_blocks ? { thinking_blocks: parsed.thinking_blocks } : {}),
+          };
         }
       } catch {
         // Not JSON — plain text assistant message.
@@ -75,6 +82,62 @@ function buildHistory(storedMessages: StoredMessage[]): Message[] {
     }
     return { role: m.role as MessageRole, content: m.content };
   });
+}
+
+type StoredAssistantPayload =
+  | {
+      __type: 'tool_use';
+      content: string | null;
+      tool_calls: ToolCall[];
+      thinking?: string | null;
+      thinking_blocks?: ThinkingBlock[];
+    }
+  | {
+      __type: 'assistant_response';
+      content: string | null;
+      thinking?: string | null;
+      thinking_blocks?: ThinkingBlock[];
+    };
+
+function parseAssistantPayload(content: string): StoredAssistantPayload | null {
+  const parsed = JSON.parse(content) as StoredAssistantPayload;
+  if (
+    parsed.__type === 'tool_use'
+    || parsed.__type === 'assistant_response'
+  ) {
+    return parsed;
+  }
+  return null;
+}
+
+function encodeAssistantMessage(
+  response: {
+    content: string | null;
+    tool_calls?: ToolCall[];
+    thinking?: string | null;
+    thinking_blocks?: ThinkingBlock[];
+  },
+): string {
+  if (response.tool_calls?.length) {
+    return JSON.stringify({
+      __type: 'tool_use',
+      content: response.content,
+      tool_calls: response.tool_calls,
+      ...(response.thinking !== undefined ? { thinking: response.thinking } : {}),
+      ...(response.thinking_blocks?.length ? { thinking_blocks: response.thinking_blocks } : {}),
+    } satisfies StoredAssistantPayload);
+  }
+
+  if (response.thinking !== undefined || response.thinking_blocks?.length) {
+    return JSON.stringify({
+      __type: 'assistant_response',
+      content: response.content,
+      ...(response.thinking !== undefined ? { thinking: response.thinking } : {}),
+      ...(response.thinking_blocks?.length ? { thinking_blocks: response.thinking_blocks } : {}),
+    } satisfies StoredAssistantPayload);
+  }
+
+  return response.content ?? '';
 }
 
 function isAgentConfig(v: unknown): v is AgentConfig {
@@ -1644,10 +1707,14 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     }
 
     // Persist assistant message — encode tool_calls as JSON when stop_reason='tool_use'
-    const assistantContent =
-      agentResponse.stop_reason === 'tool_use' && agentResponse.tool_calls?.length
-        ? JSON.stringify({ __type: 'tool_use', content: agentResponse.content, tool_calls: agentResponse.tool_calls })
-        : (agentResponse.content ?? '');
+    const assistantContent = encodeAssistantMessage({
+      content: agentResponse.content,
+      ...(agentResponse.stop_reason === 'tool_use' && agentResponse.tool_calls
+        ? { tool_calls: agentResponse.tool_calls }
+        : {}),
+      ...(agentResponse.thinking !== undefined ? { thinking: agentResponse.thinking } : {}),
+      ...(agentResponse.thinking_blocks ? { thinking_blocks: agentResponse.thinking_blocks } : {}),
+    });
     await db.addBranchMessage(
       sessionId,
       branch.id,
@@ -1671,6 +1738,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       now,
       {
         content: agentResponse.content,
+        thinking: agentResponse.thinking ?? null,
         stop_reason: agentResponse.stop_reason,
         usage: agentResponse.usage,
       },
@@ -1698,6 +1766,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     res.json({
       content: agentResponse.content,
+      thinking: agentResponse.thinking ?? null,
       stop_reason: agentResponse.stop_reason,
       tool_calls: agentResponse.tool_calls ?? [],
       usage: agentResponse.usage,
@@ -1813,10 +1882,14 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     }
 
     // Persist assistant response
-    const assistantContent =
-      agentResponse.stop_reason === 'tool_use' && agentResponse.tool_calls?.length
-        ? JSON.stringify({ __type: 'tool_use', content: agentResponse.content, tool_calls: agentResponse.tool_calls })
-        : (agentResponse.content ?? '');
+    const assistantContent = encodeAssistantMessage({
+      content: agentResponse.content,
+      ...(agentResponse.stop_reason === 'tool_use' && agentResponse.tool_calls
+        ? { tool_calls: agentResponse.tool_calls }
+        : {}),
+      ...(agentResponse.thinking !== undefined ? { thinking: agentResponse.thinking } : {}),
+      ...(agentResponse.thinking_blocks ? { thinking_blocks: agentResponse.thinking_blocks } : {}),
+    });
     await db.addBranchMessage(
       sessionId,
       branch.id,
@@ -1849,6 +1922,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       now,
       {
         content: agentResponse.content,
+        thinking: agentResponse.thinking ?? null,
         stop_reason: agentResponse.stop_reason,
         usage: agentResponse.usage,
       },
@@ -1876,6 +1950,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     res.json({
       content: agentResponse.content,
+      thinking: agentResponse.thinking ?? null,
       stop_reason: agentResponse.stop_reason,
       tool_calls: agentResponse.tool_calls ?? [],
       usage: agentResponse.usage,
@@ -1985,11 +2060,12 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
         const reqAdapter = await resolveAdapter(adapter, body.agent_config);
 
-        const toolRunner: ToolRunner = (calls, description) => {
+        const toolRunner: ToolRunner = (calls, description, thinking) => {
           const requestId = randomUUID();
           sendEvent('tool_calls', {
             request_id: requestId,
             description,
+            thinking,
             tool_calls: calls,
             branch_id: branch.id,
             conversation_id: titledConversation.id,
@@ -2015,10 +2091,10 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
         // Persist each tool round-trip
         for (const action of loopResult.tool_actions) {
-          const encoded = JSON.stringify({
-            __type: 'tool_use',
+          const encoded = encodeAssistantMessage({
             content: action.description,
             tool_calls: action.tool_calls,
+            thinking: action.thinking,
           });
           await db.addBranchMessage(sessionId, branch.id, turnSequence, 'assistant', encoded, 0, titledConversation.id);
           await db.addBranchMessage(sessionId, branch.id, turnSequence, 'tool', JSON.stringify(action.tool_results), 0, titledConversation.id);
@@ -2030,7 +2106,10 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
           branch.id,
           turnSequence,
           'assistant',
-          loopResult.content ?? '',
+          encodeAssistantMessage({
+            content: loopResult.content,
+            thinking: loopResult.thinking,
+          }),
           loopResult.total_usage.completion_tokens,
           titledConversation.id,
         );
@@ -2043,6 +2122,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         for (const action of loopResult.tool_actions) {
           await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'tool_call', now, {
             description: action.description,
+            thinking: action.thinking,
             tool_calls: action.tool_calls,
           }, titledConversation.id);
           await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'tool_result', now, {
@@ -2051,6 +2131,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
         }
         await db.addBranchReplayEvent(sessionId, branch.id, turnSequence, 'agent_response', now, {
           content: loopResult.content,
+          thinking: loopResult.thinking,
           stop_reason: loopResult.stop_reason,
           usage: loopResult.total_usage,
         }, titledConversation.id);
@@ -2064,6 +2145,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
         sendEvent('done', {
           content: loopResult.content,
+          thinking: loopResult.thinking,
           stop_reason: loopResult.stop_reason,
           tool_actions: loopResult.tool_actions,
           usage: loopResult.total_usage,

@@ -32,6 +32,7 @@ export interface ChatMessage {
   content: string;
   /** Tool actions associated with this assistant turn. */
   tool_actions?: LocalToolAction[];
+  thinking?: string | null;
   /** Unix timestamp in ms */
   timestamp: number;
   turnSequence?: number | null;
@@ -104,6 +105,7 @@ export interface AgentConfig {
 
 interface SSEDonePayload {
   content: string | null;
+  thinking?: string | null;
   stop_reason: string;
   tool_actions: Array<{ description?: string | null; tool_calls: LocalToolCall[]; tool_results: LocalToolResult[] }>;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
@@ -114,8 +116,16 @@ interface SSEDonePayload {
 interface SSEToolCallsPayload {
   request_id: string;
   description?: string | null;
+  thinking?: string | null;
   tool_calls: LocalToolCall[];
   turn_sequence?: number;
+}
+
+interface StoredAssistantPayload {
+  __type?: 'tool_use' | 'assistant_response';
+  content?: string | null;
+  thinking?: string | null;
+  tool_calls?: LocalToolCall[];
 }
 
 /** Parse SSE events from a fetch ReadableStream. Yields { event, data } for each complete event block. */
@@ -338,6 +348,194 @@ function formatConversationTimestamp(timestamp: number): string {
     : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+const THINKING_WORDS = [
+  'Pondering',
+  'Contemplating',
+  'Ruminating',
+  'Musing',
+  'Reflecting',
+  'Deliberating',
+  'Meditating',
+  'Analyzing',
+  'Synthesizing',
+  'Speculating',
+  'Evaluating',
+  'Parsing',
+  'Scrutinizing',
+  'Probing',
+  'Dissecting',
+  'Extrapolating',
+  'Ideating',
+  'Sifting',
+  'Interrogating',
+  'Envisioning',
+] as const;
+
+function supportsThinkingDisplay(agentConfig?: AgentConfig, modelLabel?: string): boolean {
+  const provider = agentConfig?.provider;
+  const model = agentConfig?.model ?? modelLabel ?? '';
+  return provider === 'anthropic-native' && /mythos|claude-.*(?:3-7|4)/i.test(model);
+}
+
+function parseStoredAssistantPayload(rawContent: string): StoredAssistantPayload | null {
+  if (!rawContent.trim().startsWith('{') || !rawContent.includes('"__type"')) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawContent) as StoredAssistantPayload;
+    if (parsed.__type === 'tool_use' || parsed.__type === 'assistant_response') {
+      return parsed;
+    }
+  } catch {
+    // Ignore invalid payloads and fall back to plain-text rendering.
+  }
+
+  return null;
+}
+
+function ThinkingWord({ active }: { active: boolean }) {
+  const [wordIndex, setWordIndex] = useState(0);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setWordIndex((current) => (current + 1) % THINKING_WORDS.length);
+    }, 1400);
+
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  return (
+    <span data-testid="thinking-status-word" className="text-[13px] font-medium tracking-tight">
+      {THINKING_WORDS[wordIndex]}
+    </span>
+  );
+}
+
+function AssistantGroup({
+  messages,
+  activeConversationId,
+  onCreateBranch,
+}: {
+  messages: ChatMessage[];
+  activeConversationId: string | null;
+  onCreateBranch?: (name: string, turnSequence: number, conversationId?: string) => Promise<void> | void;
+}) {
+  const [activeTab, setActiveTab] = useState<'response' | 'thinking'>('response');
+  const allToolActions: LocalToolAction[] = [];
+  const contentBlocks: string[] = [];
+  const thinkingBlocks: string[] = [];
+
+  for (const msg of messages) {
+    if (msg.tool_actions) {
+      allToolActions.push(...msg.tool_actions);
+    }
+
+    if (msg.thinking) {
+      thinkingBlocks.push(msg.thinking);
+    }
+
+    if (msg.content) {
+      const parsed = parseToolUse(msg.content);
+      if (parsed.content) {
+        contentBlocks.push(parsed.content);
+      }
+      if (parsed.tool_actions.length > 0) {
+        allToolActions.push(...parsed.tool_actions);
+      }
+    }
+  }
+
+  const hasThinking = thinkingBlocks.length > 0;
+  const latestTurnSequence = messages.at(-1)?.turnSequence;
+
+  useEffect(() => {
+    if (!hasThinking && activeTab === 'thinking') {
+      setActiveTab('response');
+    }
+  }, [activeTab, hasThinking]);
+
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5 py-1">
+      {hasThinking ? (
+        <div className="px-1">
+          <div className="inline-flex rounded-full bg-white/5 p-1">
+            {([
+              ['response', 'Response'],
+              ['thinking', 'Thinking'],
+            ] as const).map(([tabId, label]) => {
+              const isActive = activeTab === tabId;
+              return (
+                <button
+                  key={tabId}
+                  type="button"
+                  data-testid={`assistant-tab-${tabId}`}
+                  onClick={() => setActiveTab(tabId)}
+                  className="rounded-[var(--assessment-radius-pill)] px-3 py-1.5 text-[12px] font-semibold transition-colors"
+                  style={{
+                    background: isActive ? '#FFFFFF' : 'transparent',
+                    color: isActive ? '#000000' : 'rgba(255,255,255,0.6)',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === 'response' ? (
+        <>
+          {allToolActions.length > 0 && (
+            <div className="w-full px-1" data-testid="tool-actions-container">
+              <ToolActionCard action={allToolActions} />
+            </div>
+          )}
+          {contentBlocks.map((content, index) => (
+            <div
+              key={index}
+              className="chat-markdown w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden break-words px-2 text-[14px]"
+              style={{ color: 'var(--color-text-agent-msg)' }}
+              data-testid="agent-message"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+            />
+          ))}
+        </>
+      ) : (
+        <div
+          className="chat-markdown w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden break-words px-2 text-[14px]"
+          style={{ color: 'var(--color-text-agent-msg)', opacity: 0.86 }}
+          data-testid="thinking-message"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(thinkingBlocks.join('\n\n')) }}
+        />
+      )}
+
+      {latestTurnSequence && onCreateBranch ? (
+        <div className="px-2 pt-1">
+          <button
+            type="button"
+            onClick={() => {
+              const name = window.prompt('New branch name');
+              if (name?.trim() && typeof latestTurnSequence === 'number') {
+                void onCreateBranch(name.trim(), latestTurnSequence, activeConversationId ?? undefined);
+              }
+            }}
+            className="text-[11px] opacity-60 transition-opacity hover:opacity-100"
+            style={{ color: 'var(--color-text-main)' }}
+          >
+            Branch from here
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function ChatPanel({
   sessionId,
   constraints,
@@ -437,13 +635,20 @@ export function ChatPanel({
         };
         const loadedMessages = data.messages
           .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            timestamp: new Date(m.created_at).getTime(),
-            turnSequence: m.turn_sequence ?? null,
-          }));
+          .map((m) => {
+            const parsed = m.role === 'assistant' ? parseStoredAssistantPayload(m.content) : null;
+            return {
+              id: m.id,
+              role: m.role,
+              content: parsed ? (parsed.content ?? '') : m.content,
+              ...(parsed?.thinking !== undefined ? { thinking: parsed.thinking } : {}),
+              ...(parsed?.__type === 'tool_use' && parsed.tool_calls
+                ? { tool_actions: [{ description: parsed.content ?? null, tool_calls: parsed.tool_calls, tool_results: [] }] }
+                : {}),
+              timestamp: new Date(m.created_at).getTime(),
+              turnSequence: m.turn_sequence ?? null,
+            };
+          });
 
         setMessages((prev) => mergeMessages(prev, loadedMessages));
         if (data.conversations) {
@@ -859,7 +1064,7 @@ export function ChatPanel({
 
       for await (const { event, data } of readSSEStream(res.body)) {
         if (event === 'tool_calls') {
-          const { request_id, description, tool_calls, turn_sequence } = data as SSEToolCallsPayload;
+          const { request_id, description, thinking, tool_calls, turn_sequence } = data as SSEToolCallsPayload;
           if (typeof turn_sequence === 'number') {
             setMessages((prev) => assignTurnSequenceToLatestUserMessage(prev, turn_sequence));
           }
@@ -870,6 +1075,7 @@ export function ChatPanel({
               id: msgId,
               role: 'assistant',
               content: '',
+              ...(thinking !== undefined ? { thinking } : {}),
               tool_actions: [{ description: description ?? null, tool_calls, tool_results: [] }],
               timestamp: Date.now(),
               turnSequence: turn_sequence ?? null,
@@ -929,13 +1135,14 @@ export function ChatPanel({
           if (result.turn_sequence !== undefined) {
             onTurnComplete?.(result.turn_sequence);
           }
-          if (result.content) {
+          if (result.content || result.thinking) {
             setMessages((prev) => [
               ...prev,
               {
                 id: generateId(),
                 role: 'assistant',
-                content: result.content!,
+                content: result.content ?? '',
+                ...(result.thinking !== undefined ? { thinking: result.thinking } : {}),
                 timestamp: Date.now(),
                 turnSequence: result.turn_sequence ?? null,
               },
@@ -1008,6 +1215,7 @@ export function ChatPanel({
     selected: branch.id === selectedBranch?.id,
     onSelect: () => onBranchChange?.(branch.id),
   }));
+  const thinkingSupported = supportsThinkingDisplay(agentConfig, modelLabel);
 
   return (
     <div className="flex min-w-0 flex-col h-full overflow-hidden" style={{ background: 'var(--color-bg-chat)' }}>
@@ -1106,74 +1314,56 @@ export function ChatPanel({
               );
             }
 
-            // Assistant group: extract all tool actions and all content
-            const allToolActions: LocalToolAction[] = [];
-            const contentBlocks: string[] = [];
-            
-            for (const msg of group.messages) {
-              if (msg.tool_actions) {
-                allToolActions.push(...msg.tool_actions);
-              }
-              
-              if (msg.content) {
-                const parsed = parseToolUse(msg.content);
-                if (parsed.content) contentBlocks.push(parsed.content);
-                if (parsed.tool_actions.length > 0) {
-                  allToolActions.push(...parsed.tool_actions);
-                }
-              }
-            }
-
             return (
-              <div key={`group-${groupIdx}`} className="flex min-w-0 flex-col gap-1.5 py-1">
-                {allToolActions.length > 0 && (
-                  <div className="w-full px-1" data-testid="tool-actions-container">
-                    <ToolActionCard action={allToolActions} />
-                  </div>
-                )}
-                {contentBlocks.map((content, i) => (
-                  <div
-                    key={i}
-                    className="chat-markdown w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden break-words px-2 text-[14px]"
-                    style={{ color: 'var(--color-text-agent-msg)' }}
-                    data-testid="agent-message"
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
-                  />
-                ))}
-                {group.messages.at(-1)?.turnSequence && onCreateBranch ? (
-                  <div className="px-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const name = window.prompt('New branch name');
-                        const turnSequence = group.messages.at(-1)?.turnSequence;
-                        if (name?.trim() && typeof turnSequence === 'number') {
-                          void onCreateBranch(name.trim(), turnSequence, activeConversationId ?? undefined);
-                        }
-                      }}
-                      className="text-[11px] opacity-60 transition-opacity hover:opacity-100"
-                      style={{ color: 'var(--color-text-main)' }}
-                    >
-                      Branch from here
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+              <AssistantGroup
+                key={`group-${groupIdx}`}
+                messages={group.messages}
+                activeConversationId={activeConversationId}
+                onCreateBranch={onCreateBranch}
+              />
             );
           });
         })()}
 
         {loading && (
           <div className="flex items-start gap-2 py-3">
-            <div
-              data-testid="loading-spinner"
-              className="flex gap-2 items-center px-5 py-3 rounded-full"
-              style={{ background: 'var(--color-bg-agent-msg)', opacity: 0.6 }}
-            >
-              <span className="w-1.5 h-1.5 rounded-full animate-bounce bg-current" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 rounded-full animate-bounce bg-current" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 rounded-full animate-bounce bg-current" style={{ animationDelay: '300ms' }} />
-            </div>
+            {thinkingSupported ? (
+              <div
+                data-testid="loading-spinner"
+                className="flex max-w-[320px] flex-col gap-3 rounded-[var(--assessment-radius-shell)] px-4 py-4"
+                style={{ background: 'var(--color-bg-agent-msg)', opacity: 0.72 }}
+              >
+                <div className="inline-flex w-fit rounded-full bg-white/5 p-1">
+                  <button
+                    type="button"
+                    className="rounded-[var(--assessment-radius-pill)] px-3 py-1.5 text-[12px] font-semibold"
+                    style={{ background: 'transparent', color: 'rgba(255,255,255,0.45)' }}
+                    disabled
+                  >
+                    Response
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-[var(--assessment-radius-pill)] px-3 py-1.5 text-[12px] font-semibold"
+                    style={{ background: '#FFFFFF', color: '#000000' }}
+                    disabled
+                  >
+                    Thinking
+                  </button>
+                </div>
+                <div style={{ color: 'var(--color-text-agent-msg)' }}>
+                  <ThinkingWord active />
+                </div>
+              </div>
+            ) : (
+              <div
+                data-testid="loading-spinner"
+                className="flex items-center rounded-full px-5 py-3"
+                style={{ background: 'var(--color-bg-agent-msg)', opacity: 0.72, color: 'var(--color-text-agent-msg)' }}
+              >
+                <ThinkingWord active />
+              </div>
+            )}
           </div>
         )}
 
