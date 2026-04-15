@@ -10,7 +10,9 @@ import {
   synthesizeReplayEventsFromMessages,
   type ConversationEntry,
   type ReviewDataPayload,
+  type ReviewEvaluationResult,
   type ReviewMetric,
+  type ReviewSessionEvaluation,
 } from '../lib/review-replay.js';
 import { Timeline } from './Timeline.js';
 import { DropdownMenu, DropdownTriggerLabel } from './DropdownMenu.js';
@@ -25,54 +27,13 @@ interface ReviewDashboardProps {
 
 // ─── Evaluation types ───────────────────────────────────────────────────────
 
-interface InfraMetricScore {
-  name: string;
-  label: string;
-  score: number;
-  details: string;
-}
-
-interface EvaluatorDimensionScore {
-  dimension: string;
-  label: string;
-  score: number;
-  rationale: string;
-}
-
-interface AcceptanceCriterionResult {
-  criterion: string;
-  score: number;   // 0–100
-  rationale: string;
-}
-
-interface RubricQuestionScore {
-  question: string;
-  score: number;   // 0–10
-  rationale: string;
-  is_default: boolean;
-}
-
-interface Iteration {
-  index: number;
-  rewound_at?: number;
-  message_count: number;
-  user_messages: string[];
-}
-
-interface EvaluationResult {
-  infrastructure: {
-    caching_effectiveness: InfraMetricScore;
-    error_handling_coverage: InfraMetricScore;
-    scaling_awareness: InfraMetricScore;
-  };
-  llm_evaluation: {
-    scores: EvaluatorDimensionScore[];
-    overall_summary: string;
-    acceptance_criteria_results?: AcceptanceCriterionResult[];
-    rubric_scores?: RubricQuestionScore[];
-  };
-  iterations: Iteration[];
-}
+type EvaluationResult = ReviewEvaluationResult;
+type SessionEvaluation = ReviewSessionEvaluation;
+type InfraMetricScore = EvaluationResult['infrastructure']['caching_effectiveness'];
+type EvaluatorDimensionScore = EvaluationResult['llm_evaluation']['scores'][number];
+type AcceptanceCriterionResult = NonNullable<EvaluationResult['llm_evaluation']['acceptance_criteria_results']>[number];
+type RubricQuestionScore = NonNullable<EvaluationResult['llm_evaluation']['rubric_scores']>[number];
+type Iteration = EvaluationResult['iterations'][number];
 
 function formatTimestamp(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], {
@@ -345,6 +306,68 @@ function EvaluationPanel({ result, sessionId, apiBase }: {
   ];
   return (
     <div className="flex flex-col gap-4">
+      {/* Reviewer Q&A */}
+      <div className="pt-1">
+        <div className="mb-2 flex items-center gap-2">
+          <MessageSquare size={13} style={{ color: 'var(--color-text-dimmest)' }} />
+          <span className="text-[11px] font-bold uppercase tracking-wider opacity-40" style={{ color: 'var(--color-text-dim)' }}>
+            Ask about this candidate
+          </span>
+        </div>
+
+        {/* Previous Q&A pairs */}
+        {qaEntries.length > 0 && (
+          <div className="mb-3 flex flex-col gap-3">
+            {qaEntries.map((entry, i) => (
+              <div key={i} className="flex flex-col gap-1">
+                <div className="flex items-start gap-2">
+                  <User size={11} className="mt-0.5 shrink-0 opacity-40" style={{ color: 'var(--color-text-dim)' }} />
+                  <span className="text-[12px] font-medium" style={{ color: 'var(--color-text-main)' }}>
+                    {entry.question}
+                  </span>
+                </div>
+                <div className="flex items-start gap-2 pl-1">
+                  <FlaskConical size={11} className="mt-0.5 shrink-0 opacity-40" style={{ color: 'var(--color-brand)' }} />
+                  {entry.answer === null ? (
+                    <span className="flex items-center gap-1.5 text-[12px] opacity-40" style={{ color: 'var(--color-text-dim)' }}>
+                      <Loader size={11} className="animate-spin" />
+                      Thinking…
+                    </span>
+                  ) : (
+                    <span className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text-dim)' }}>
+                      {entry.answer}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Input */}
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+          <input
+            type="text"
+            value={qaInput}
+            onChange={(e) => setQaInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleAsk(); }}
+            placeholder="Did the candidate plan before coding?"
+            disabled={qaLoading}
+            className="flex-1 bg-transparent text-[12px] outline-none placeholder:opacity-25 disabled:opacity-40"
+            style={{ color: 'var(--color-text-main)' }}
+          />
+          <button
+            type="button"
+            onClick={() => void handleAsk()}
+            disabled={!qaInput.trim() || qaLoading}
+            className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-opacity disabled:opacity-30"
+            style={{ background: 'var(--color-brand)', color: '#fff' }}
+          >
+            Ask
+          </button>
+        </div>
+      </div>
+
       {/* Summary */}
       <p className="text-[12px] leading-relaxed italic" style={{ color: 'var(--color-text-dim)' }}>
         {result.llm_evaluation.overall_summary}
@@ -433,67 +456,6 @@ function EvaluationPanel({ result, sessionId, apiBase }: {
         </button>
       )}
 
-      {/* Reviewer Q&A */}
-      <div className="pt-1">
-        <div className="mb-2 flex items-center gap-2">
-          <MessageSquare size={13} style={{ color: 'var(--color-text-dimmest)' }} />
-          <span className="text-[11px] font-bold uppercase tracking-wider opacity-40" style={{ color: 'var(--color-text-dim)' }}>
-            Ask about this candidate
-          </span>
-        </div>
-
-        {/* Previous Q&A pairs */}
-        {qaEntries.length > 0 && (
-          <div className="mb-3 flex flex-col gap-3">
-            {qaEntries.map((entry, i) => (
-              <div key={i} className="flex flex-col gap-1">
-                <div className="flex items-start gap-2">
-                  <User size={11} className="mt-0.5 shrink-0 opacity-40" style={{ color: 'var(--color-text-dim)' }} />
-                  <span className="text-[12px] font-medium" style={{ color: 'var(--color-text-main)' }}>
-                    {entry.question}
-                  </span>
-                </div>
-                <div className="flex items-start gap-2 pl-1">
-                  <FlaskConical size={11} className="mt-0.5 shrink-0 opacity-40" style={{ color: 'var(--color-brand)' }} />
-                  {entry.answer === null ? (
-                    <span className="flex items-center gap-1.5 text-[12px] opacity-40" style={{ color: 'var(--color-text-dim)' }}>
-                      <Loader size={11} className="animate-spin" />
-                      Thinking…
-                    </span>
-                  ) : (
-                    <span className="text-[12px] leading-relaxed" style={{ color: 'var(--color-text-dim)' }}>
-                      {entry.answer}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Input */}
-        <div className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-          <input
-            type="text"
-            value={qaInput}
-            onChange={(e) => setQaInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void handleAsk(); }}
-            placeholder="Did the candidate plan before coding?"
-            disabled={qaLoading}
-            className="flex-1 bg-transparent text-[12px] outline-none placeholder:opacity-25 disabled:opacity-40"
-            style={{ color: 'var(--color-text-main)' }}
-          />
-          <button
-            type="button"
-            onClick={() => void handleAsk()}
-            disabled={!qaInput.trim() || qaLoading}
-            className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-opacity disabled:opacity-30"
-            style={{ background: 'var(--color-brand)', color: '#fff' }}
-          >
-            Ask
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -564,7 +526,7 @@ function buildSessionStats(session: ReviewDataPayload['session']): StatCard[] {
       icon: Activity,
       label: 'Score',
       value: hasScore ? `${scorePct}%` : '—',
-      detail: hasScore ? 'composite score' : 'run evaluation to score',
+      detail: hasScore ? 'session analysis average' : 'run evaluation to score',
       pct: hasScore ? scorePct : -1,
       color: hasScore ? scoreColor : 'var(--color-text-dimmest)',
     },
@@ -938,6 +900,10 @@ export function ReviewDashboard({
             ? payload.recording.events
             : synthesizeReplayEventsFromMessages(payload.messages, payload.session.created_at);
           setData(payload);
+          if (payload.evaluation) {
+            setEvaluationResult(payload.evaluation.result);
+            setShowEvaluation(true);
+          }
           setActiveBranchId((current) => current ?? payload.branch?.id ?? payload.branches?.[0]?.id ?? null);
           setSelectedEventIndex(Math.max(0, initialEvents.length - 1));
         }
@@ -971,8 +937,16 @@ export function ReviewDashboard({
         } catch { /* response body was not JSON */ }
         throw new Error(message);
       }
-      const result = await response.json() as EvaluationResult;
-      setEvaluationResult(result);
+      const evaluation = await response.json() as SessionEvaluation;
+      setEvaluationResult(evaluation.result);
+      setData((prev) => prev ? {
+        ...prev,
+        session: {
+          ...prev.session,
+          score: evaluation.score,
+        },
+        evaluation,
+      } : prev);
     } catch (err) {
       setEvaluationError(err instanceof Error ? err.message : 'Evaluation failed');
     } finally {

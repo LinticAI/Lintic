@@ -1,7 +1,7 @@
 import { describe, it, test, expect, beforeEach } from 'vitest';
 import { SQLiteAdapter } from './database.js';
 import type { CreateSessionConfig } from './database.js';
-import type { Constraint } from './types.js';
+import type { Constraint, EvaluationResult } from './types.js';
 
 const BASE_CONSTRAINT: Constraint = {
   max_session_tokens: 50000,
@@ -104,6 +104,37 @@ describe('getSession', () => {
     const { id } = await db.createSession(BASE_CONFIG);
     const session = await db.getSession(id);
     expect(session!.score).toBeUndefined();
+  });
+});
+
+describe('session evaluation persistence', () => {
+  test('stores and reloads a persisted session analysis while updating session.score', async () => {
+    const db = makeAdapter();
+    const { id } = await db.createSession(BASE_CONFIG);
+
+    const result: EvaluationResult = {
+      infrastructure: {
+        caching_effectiveness: { name: 'caching_effectiveness', label: 'Caching', score: 0.4, details: 'cache details' },
+        error_handling_coverage: { name: 'error_handling_coverage', label: 'Errors', score: 0.8, details: 'error details' },
+        scaling_awareness: { name: 'scaling_awareness', label: 'Scaling', score: 0.6, details: 'scale details' },
+      },
+      llm_evaluation: {
+        scores: [
+          { dimension: 'prompt_quality', label: 'Prompt Quality', score: 7, rationale: 'Good prompts.' },
+        ],
+        overall_summary: 'Solid session.',
+      },
+      iterations: [],
+    };
+
+    const persisted = await db.upsertSessionEvaluation(id, result, 0.625);
+    const reloaded = await db.getSessionEvaluation(id);
+    const session = await db.getSession(id);
+
+    expect(persisted.score).toBe(0.625);
+    expect(reloaded).toEqual(persisted);
+    expect(session?.score).toBe(0.625);
+    expect(reloaded?.result.llm_evaluation.overall_summary).toBe('Solid session.');
   });
 });
 

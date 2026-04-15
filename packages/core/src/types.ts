@@ -416,6 +416,14 @@ export interface EvaluationResult {
   iterations: Iteration[];
 }
 
+export interface SessionEvaluation {
+  session_id: string;
+  score: number; // 0-1 average across persisted session analysis components
+  result: EvaluationResult;
+  created_at: number;
+  updated_at: number;
+}
+
 // ─── Candidate Comparison Dashboard ──────────────────────────────────────────
 
 export interface ComparisonSessionRow {

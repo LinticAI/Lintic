@@ -16,6 +16,14 @@ export interface SessionRow {
   score: number | null;
 }
 
+export interface SessionEvaluationRow {
+  session_id: string;
+  score: number;
+  result_json: string;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface MessageRow {
   id: number;
   session_id: string;

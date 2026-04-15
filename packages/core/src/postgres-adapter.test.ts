@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { PostgresAdapter } from './database.js';
 import type { CreateSessionConfig } from './database.js';
-import type { Constraint } from './types.js';
+import type { Constraint, EvaluationResult } from './types.js';
 
 const poolInstances: MockPool[] = [];
 
@@ -152,6 +152,32 @@ describe('PostgresAdapter', () => {
       { id: 1, session_id: 'session-1', branch_id: 'branch-1', conversation_id: 'conv-1', turn_sequence: null, role: 'user', content: 'first', token_count: 5, created_at: 100, rewound_at: null },
       { id: 2, session_id: 'session-1', branch_id: 'branch-1', conversation_id: 'conv-1', turn_sequence: null, role: 'assistant', content: 'second', token_count: 8, created_at: 200, rewound_at: null },
     ]);
+  });
+
+  test('upsertSessionEvaluation persists analysis and updates session score', async () => {
+    const adapter = new PostgresAdapter({ connectionString: 'postgres://lintic:test@localhost/lintic' });
+    await adapter.initialize();
+    const pool = latestPool();
+    pool.queue.push({ rows: [], rowCount: 0 });
+
+    const result: EvaluationResult = {
+      infrastructure: {
+        caching_effectiveness: { name: 'caching_effectiveness', label: 'Caching', score: 0.4, details: '' },
+        error_handling_coverage: { name: 'error_handling_coverage', label: 'Errors', score: 0.6, details: '' },
+        scaling_awareness: { name: 'scaling_awareness', label: 'Scaling', score: 0.8, details: '' },
+      },
+      llm_evaluation: {
+        scores: [{ dimension: 'prompt_quality', label: 'Prompt Quality', score: 7, rationale: '' }],
+        overall_summary: 'Summary',
+      },
+      iterations: [],
+    };
+
+    const evaluation = await adapter.upsertSessionEvaluation('session-1', result, 0.65);
+
+    expect(evaluation.score).toBe(0.65);
+    expect(pool.queries.some((query) => query.text.includes('INSERT INTO session_evaluations'))).toBe(true);
+    expect(pool.queries.some((query) => query.text.includes('UPDATE sessions SET score = $1 WHERE id = $2'))).toBe(true);
   });
 
   test('getReplayEvents orders by timestamp ASC then id ASC and parses payload JSON', async () => {

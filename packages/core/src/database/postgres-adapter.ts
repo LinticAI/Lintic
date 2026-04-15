@@ -7,9 +7,11 @@ import type {
   ContextResource,
   ContextResourceKind,
   ConversationSummary,
+  EvaluationResult,
   MessageRole,
   ReplayEventType,
   Session,
+  SessionEvaluation,
   SessionBranch,
   SessionStatus,
   WorkspaceSnapshot,
@@ -36,6 +38,7 @@ import {
   normalizeContextAttachmentRow,
   normalizeContextResourceRow,
   normalizeConversationRow,
+  normalizeSessionEvaluationRow,
   normalizeSessionBranchRow,
   normalizeSessionRow,
   normalizeWorkspaceSnapshotRow,
@@ -45,6 +48,7 @@ import {
   rowToConversation,
   rowToPromptConfig,
   rowToSession,
+  rowToSessionEvaluation,
   rowToSessionBranch,
   rowToWorkspaceSnapshot,
 } from './mapping.js';
@@ -56,6 +60,7 @@ import type {
   MessageRow,
   PromptRow,
   ReplayEventRow,
+  SessionEvaluationRow,
   SessionBranchRow,
   SessionRow,
   WorkspaceSnapshotRow,
@@ -173,6 +178,45 @@ export class PostgresAdapter implements DatabaseAdapter {
     await this.initialize();
     const result = await this.pool.query<SessionRow>('SELECT * FROM sessions WHERE id = $1', [id]);
     return result.rows[0] ? rowToSession(normalizeSessionRow(result.rows[0])) : null;
+  }
+
+  async getSessionEvaluation(sessionId: string): Promise<SessionEvaluation | null> {
+    await this.initialize();
+    const result = await this.pool.query<SessionEvaluationRow>(
+      'SELECT * FROM session_evaluations WHERE session_id = $1',
+      [sessionId],
+    );
+    return result.rows[0] ? rowToSessionEvaluation(normalizeSessionEvaluationRow(result.rows[0])) : null;
+  }
+
+  async upsertSessionEvaluation(sessionId: string, result: EvaluationResult, score: number): Promise<SessionEvaluation> {
+    await this.initialize();
+    const now = Date.now();
+    const existing = await this.pool.query<{ created_at: string | number }>(
+      'SELECT created_at FROM session_evaluations WHERE session_id = $1',
+      [sessionId],
+    );
+    const createdAt = existing.rows[0] ? Number(existing.rows[0].created_at) : now;
+
+    await this.pool.query(
+      `INSERT INTO session_evaluations (session_id, score, result_json, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (session_id) DO UPDATE SET
+         score = EXCLUDED.score,
+         result_json = EXCLUDED.result_json,
+         updated_at = EXCLUDED.updated_at`,
+      [sessionId, score, JSON.stringify(result), createdAt, now],
+    );
+
+    await this.pool.query('UPDATE sessions SET score = $1 WHERE id = $2', [score, sessionId]);
+
+    return {
+      session_id: sessionId,
+      score,
+      result,
+      created_at: createdAt,
+      updated_at: now,
+    };
   }
 
   async getSessionToken(id: string): Promise<string | null> {

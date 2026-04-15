@@ -5,6 +5,7 @@ import type {
   ContextResource,
   ContextResourceKind,
   ConversationSummary,
+  SessionEvaluation,
   MockPgPoolExport,
   Session,
   SessionBranch,
@@ -22,6 +23,7 @@ import type {
   ContextResourceRow,
   ConversationRow,
   PromptRow,
+  SessionEvaluationRow,
   SessionBranchRow,
   SessionRow,
   WorkspaceSnapshotRow,
@@ -49,6 +51,15 @@ export function normalizeAssessmentLinkRow(row: AssessmentLinkRow): AssessmentLi
     created_at: Number(row.created_at),
     expires_at: Number(row.expires_at),
     consumed_at: row.consumed_at === null || row.consumed_at === undefined ? null : Number(row.consumed_at),
+  };
+}
+
+export function normalizeSessionEvaluationRow(row: SessionEvaluationRow): SessionEvaluationRow {
+  return {
+    ...row,
+    score: Number(row.score),
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
   };
 }
 
@@ -124,6 +135,16 @@ export function rowToSession(row: SessionRow): Session {
   }
 
   return session;
+}
+
+export function rowToSessionEvaluation(row: SessionEvaluationRow): SessionEvaluation {
+  return {
+    session_id: row.session_id,
+    score: Number(row.score),
+    result: JSON.parse(row.result_json),
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
+  };
 }
 
 export function rowToSessionBranch(row: SessionBranchRow): SessionBranch {

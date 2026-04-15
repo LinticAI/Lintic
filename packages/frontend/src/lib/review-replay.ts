@@ -11,6 +11,63 @@ export interface ReviewReplayEvent {
   payload: unknown;
 }
 
+export interface ReviewInfraMetricScore {
+  name: string;
+  label: string;
+  score: number;
+  details: string;
+}
+
+export interface ReviewEvaluatorDimensionScore {
+  dimension: string;
+  label: string;
+  score: number;
+  rationale: string;
+}
+
+export interface ReviewAcceptanceCriterionResult {
+  criterion: string;
+  score: number;
+  rationale: string;
+}
+
+export interface ReviewRubricQuestionScore {
+  question: string;
+  score: number;
+  rationale: string;
+  is_default: boolean;
+}
+
+export interface ReviewIteration {
+  index: number;
+  rewound_at?: number;
+  message_count: number;
+  user_messages: string[];
+}
+
+export interface ReviewEvaluationResult {
+  infrastructure: {
+    caching_effectiveness: ReviewInfraMetricScore;
+    error_handling_coverage: ReviewInfraMetricScore;
+    scaling_awareness: ReviewInfraMetricScore;
+  };
+  llm_evaluation: {
+    scores: ReviewEvaluatorDimensionScore[];
+    overall_summary: string;
+    acceptance_criteria_results?: ReviewAcceptanceCriterionResult[];
+    rubric_scores?: ReviewRubricQuestionScore[];
+  };
+  iterations: ReviewIteration[];
+}
+
+export interface ReviewSessionEvaluation {
+  session_id: string;
+  score: number;
+  result: ReviewEvaluationResult;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface ReviewPromptSummary {
   id: string;
   title: string;
@@ -64,6 +121,7 @@ export interface ReviewDataPayload {
     rewound_at: number | null;
   }>;
   prompt?: ReviewPromptSummary | null;
+  evaluation?: ReviewSessionEvaluation | null;
   workspace_snapshot?: {
     active_path?: string;
     filesystem: Array<{ path: string; encoding: 'utf-8' | 'base64'; content: string }>;

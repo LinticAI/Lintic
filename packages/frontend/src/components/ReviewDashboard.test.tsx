@@ -171,4 +171,42 @@ describe('ReviewDashboard', () => {
     expect(screen.getByText('Actually, switch to Fastify instead.')).toBeInTheDocument();
     expect(screen.getByText('Reworking the server setup for Fastify.')).toBeInTheDocument();
   });
+
+  test('hydrates persisted session analysis from the review payload', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ...reviewPayload,
+        session: {
+          ...reviewPayload.session,
+          score: 0.73,
+        },
+        evaluation: {
+          session_id: 'sess-1',
+          score: 0.73,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          result: {
+            infrastructure: {
+              caching_effectiveness: { name: 'caching_effectiveness', label: 'Caching', score: 0.5, details: 'cache' },
+              error_handling_coverage: { name: 'error_handling_coverage', label: 'Errors', score: 0.7, details: 'errors' },
+              scaling_awareness: { name: 'scaling_awareness', label: 'Scaling', score: 0.9, details: 'scaling' },
+            },
+            llm_evaluation: {
+              scores: [
+                { dimension: 'prompt_quality', label: 'Prompt Quality', score: 8, rationale: 'Clear prompts.' },
+              ],
+              overall_summary: 'Persisted analysis summary.',
+            },
+            iterations: [],
+          },
+        },
+      }),
+    } as Response));
+
+    render(<ReviewDashboard sessionId="sess-1" isDark={false} onToggleTheme={() => undefined} />);
+
+    await waitFor(() => expect(screen.getByText('Persisted analysis summary.')).toBeInTheDocument());
+    expect(screen.getByText('73%')).toBeInTheDocument();
+  });
 });

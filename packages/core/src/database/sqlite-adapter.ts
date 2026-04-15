@@ -7,9 +7,11 @@ import type {
   ContextResource,
   ContextResourceKind,
   ConversationSummary,
+  EvaluationResult,
   MessageRole,
   ReplayEventType,
   Session,
+  SessionEvaluation,
   SessionBranch,
   SessionStatus,
   WorkspaceSnapshot,
@@ -38,6 +40,7 @@ import {
   rowToConversation,
   rowToPromptConfig,
   rowToSession,
+  rowToSessionEvaluation,
   rowToSessionBranch,
   rowToWorkspaceSnapshot,
 } from './mapping.js';
@@ -49,6 +52,7 @@ import type {
   MessageRow,
   PromptRow,
   ReplayEventRow,
+  SessionEvaluationRow,
   SessionBranchRow,
   SessionRow,
   WorkspaceSnapshotRow,
@@ -205,6 +209,40 @@ export class SQLiteAdapter implements DatabaseAdapter {
   getSession(id: string): Promise<Session | null> {
     const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as SessionRow | undefined;
     return Promise.resolve(row ? rowToSession(row) : null);
+  }
+
+  getSessionEvaluation(sessionId: string): Promise<SessionEvaluation | null> {
+    const row = this.db.prepare(
+      'SELECT * FROM session_evaluations WHERE session_id = ?',
+    ).get(sessionId) as SessionEvaluationRow | undefined;
+    return Promise.resolve(row ? rowToSessionEvaluation(row) : null);
+  }
+
+  upsertSessionEvaluation(sessionId: string, result: EvaluationResult, score: number): Promise<SessionEvaluation> {
+    const now = Date.now();
+    const existing = this.db.prepare(
+      'SELECT created_at FROM session_evaluations WHERE session_id = ?',
+    ).get(sessionId) as { created_at: number } | undefined;
+    const createdAt = existing?.created_at ?? now;
+
+    this.db.prepare(`
+      INSERT INTO session_evaluations (session_id, score, result_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        score = excluded.score,
+        result_json = excluded.result_json,
+        updated_at = excluded.updated_at
+    `).run(sessionId, score, JSON.stringify(result), createdAt, now);
+
+    this.db.prepare('UPDATE sessions SET score = ? WHERE id = ?').run(score, sessionId);
+
+    return Promise.resolve({
+      session_id: sessionId,
+      score,
+      result,
+      created_at: createdAt,
+      updated_at: now,
+    });
   }
 
   getSessionToken(id: string): Promise<string | null> {

@@ -11,6 +11,7 @@ import type {
   ToolDefinition,
   SessionContext,
   Session,
+  SessionEvaluation,
   StoredMessage,
   StoredReplayEvent,
   CreateAssessmentLinkConfig,
@@ -55,6 +56,7 @@ class FakeDb implements DatabaseAdapter {
   contextResourceStore = new Map<string, ContextResource[]>();
   assessmentLinks = new Map<string, AssessmentLinkRecord>();
   usedAssessmentLinks = new Map<string, string>();
+  sessionEvaluations = new Map<string, SessionEvaluation>();
   turnSequences = new Map<string, number>();
   nextMsgId = 1;
   nextReplayId = 1;
@@ -150,6 +152,28 @@ class FakeDb implements DatabaseAdapter {
 
   getSessionToken(id: string): Promise<string | null> {
     return Promise.resolve(this.sessions.get(id)?.token ?? null);
+  }
+
+  getSessionEvaluation(sessionId: string): Promise<SessionEvaluation | null> {
+    return Promise.resolve(this.sessionEvaluations.get(sessionId) ?? null);
+  }
+
+  upsertSessionEvaluation(sessionId: string, result: import('@lintic/core').EvaluationResult, score: number): Promise<SessionEvaluation> {
+    const now = Date.now();
+    const existing = this.sessionEvaluations.get(sessionId);
+    const evaluation: SessionEvaluation = {
+      session_id: sessionId,
+      score,
+      result,
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
+    this.sessionEvaluations.set(sessionId, evaluation);
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      this.sessions.set(sessionId, { ...session, score });
+    }
+    return Promise.resolve(evaluation);
   }
 
   getMainBranch(sessionId: string): Promise<SessionBranch | null> {

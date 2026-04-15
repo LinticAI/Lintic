@@ -1,4 +1,5 @@
 import type {
+  EvaluationResult,
   InfrastructureMetricScore,
   InfrastructureMetrics,
   Iteration,
@@ -206,6 +207,25 @@ export function truncateHistory(
   const active = messages.filter((m) => m.rewound_at === null);
   if (active.length <= maxMessages) return active;
   return active.slice(active.length - maxMessages);
+}
+
+export function computeSessionAnalysisScore(result: EvaluationResult): number {
+  const values: number[] = [
+    result.infrastructure.caching_effectiveness.score,
+    result.infrastructure.error_handling_coverage.score,
+    result.infrastructure.scaling_awareness.score,
+    ...result.llm_evaluation.scores.map((score) => score.score / 10),
+    ...(result.llm_evaluation.acceptance_criteria_results ?? []).map((criterion) => criterion.score / 100),
+    ...(result.llm_evaluation.rubric_scores ?? []).map((question) => question.score / 10),
+  ]
+    .filter((value) => Number.isFinite(value))
+    .map(clamp01);
+
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return clamp01(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
 
 // ─── Evaluator Context Builder ────────────────────────────────────────────────

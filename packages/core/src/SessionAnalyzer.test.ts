@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import type { InfrastructureMetricScore, MockPgPoolExport } from './types.js';
+import type { EvaluationResult, InfrastructureMetricScore, MockPgPoolExport } from './types.js';
 import type { StoredMessage, StoredReplayEvent } from './database.js';
 import {
   aggregatePostgresStats,
   buildIterations,
+  computeSessionAnalysisScore,
   computeInfrastructureMetrics,
   extractRedisStats,
   truncateHistory,
@@ -316,5 +317,56 @@ describe('truncateHistory', () => {
       makeMessage(2, 'assistant', 'rewound', 1000),
     ];
     expect(truncateHistory(messages, 10)).toHaveLength(0);
+  });
+});
+
+// ─── computeSessionAnalysisScore ──────────────────────────────────────────────
+
+describe('computeSessionAnalysisScore', () => {
+  test('averages infrastructure, llm dimensions, acceptance criteria, and rubric questions', () => {
+    const result: EvaluationResult = {
+      infrastructure: {
+        caching_effectiveness: { name: 'caching_effectiveness', label: 'Caching', score: 0.5, details: '' },
+        error_handling_coverage: { name: 'error_handling_coverage', label: 'Errors', score: 0.75, details: '' },
+        scaling_awareness: { name: 'scaling_awareness', label: 'Scaling', score: 1, details: '' },
+      },
+      llm_evaluation: {
+        scores: [
+          { dimension: 'prompt_quality', label: 'Prompt Quality', score: 8, rationale: '' },
+          { dimension: 'technical_direction', label: 'Technical Direction', score: 6, rationale: '' },
+        ],
+        overall_summary: 'Strong session.',
+        acceptance_criteria_results: [
+          { criterion: 'criterion-1', score: 90, rationale: '' },
+          { criterion: 'criterion-2', score: 70, rationale: '' },
+        ],
+        rubric_scores: [
+          { question: 'question-1', score: 5, rationale: '', is_default: true },
+        ],
+      },
+      iterations: [],
+    };
+
+    const expected = (0.5 + 0.75 + 1 + 0.8 + 0.6 + 0.9 + 0.7 + 0.5) / 8;
+    expect(computeSessionAnalysisScore(result)).toBeCloseTo(expected, 5);
+  });
+
+  test('falls back to available analysis dimensions when optional groups are absent', () => {
+    const result: EvaluationResult = {
+      infrastructure: {
+        caching_effectiveness: { name: 'caching_effectiveness', label: 'Caching', score: 0.2, details: '' },
+        error_handling_coverage: { name: 'error_handling_coverage', label: 'Errors', score: 0.4, details: '' },
+        scaling_awareness: { name: 'scaling_awareness', label: 'Scaling', score: 0.6, details: '' },
+      },
+      llm_evaluation: {
+        scores: [
+          { dimension: 'prompt_quality', label: 'Prompt Quality', score: 7, rationale: '' },
+        ],
+        overall_summary: 'Summary.',
+      },
+      iterations: [],
+    };
+
+    expect(computeSessionAnalysisScore(result)).toBeCloseTo((0.2 + 0.4 + 0.6 + 0.7) / 4, 5);
   });
 });

@@ -6,7 +6,9 @@ import type {
   ContextResourceKind,
   ConversationSummary,
   MockPgPoolExport,
+  EvaluationResult,
   Session,
+  SessionEvaluation,
   SessionBranch,
   SessionStatus,
   Constraint,
@@ -139,6 +141,8 @@ export interface DatabaseAdapter {
   createAssessmentLink(config: CreateAssessmentLinkConfig): Promise<AssessmentLinkRecord>;
   getSession(id: string): Promise<Session | null>;
   getSessionToken(id: string): Promise<string | null>;
+  getSessionEvaluation(sessionId: string): Promise<SessionEvaluation | null>;
+  upsertSessionEvaluation(sessionId: string, result: EvaluationResult, score: number): Promise<SessionEvaluation>;
   addMessage(sessionId: string, role: MessageRole, content: string, tokenCount: number): Promise<void>;
   getMessages(sessionId: string): Promise<StoredMessage[]>;
   closeSession(id: string, status?: Exclude<SessionStatus, 'active'>): Promise<void>;

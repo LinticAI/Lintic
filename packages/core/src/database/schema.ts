@@ -30,6 +30,14 @@ export const SQLITE_SCHEMA = `
     rewound_at INTEGER
   );
 
+  CREATE TABLE IF NOT EXISTS session_evaluations (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+    score REAL NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS replay_events (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -174,6 +182,13 @@ export const POSTGRES_SCHEMA_STATEMENTS = [
     token_count INTEGER NOT NULL,
     created_at BIGINT NOT NULL,
     rewound_at BIGINT
+  )`,
+  `CREATE TABLE IF NOT EXISTS session_evaluations (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+    score DOUBLE PRECISION NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS replay_events (
     id BIGSERIAL PRIMARY KEY,

@@ -42,6 +42,7 @@ import {
   resolveSecretKey,
   verifyAssessmentLinkToken,
   buildIterations,
+  computeSessionAnalysisScore,
   extractRedisStats,
   aggregatePostgresStats,
   computeInfrastructureMetrics,
@@ -2486,6 +2487,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     };
     const metrics = computeSessionMetrics({ session, messages, recording });
     const prompt = await db.getPrompt(session.prompt_id);
+    const evaluation = await db.getSessionEvaluation(sessionId);
 
     res.json({
       session,
@@ -2494,6 +2496,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
       metrics,
       recording,
       prompt,
+      evaluation,
       branch,
       branches: await db.listBranches(sessionId),
       conversation,
@@ -2512,6 +2515,12 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
 
     if (!config.evaluation) {
       res.status(422).json({ error: 'No evaluation config found in lintic.yml — add an evaluation block to enable LLM scoring' });
+      return;
+    }
+
+    const existingEvaluation = await db.getSessionEvaluation(sessionId);
+    if (existingEvaluation) {
+      res.json(existingEvaluation);
       return;
     }
 
@@ -2556,7 +2565,9 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     });
 
     const result: EvaluationResult = { infrastructure, llm_evaluation, iterations };
-    res.json(result);
+    const score = computeSessionAnalysisScore(result);
+    const persisted = await db.upsertSessionEvaluation(sessionId, result, score);
+    res.json(persisted);
   }));
 
   // POST /api/sessions/:id/ask — answer a reviewer question about the session using the evaluator LLM
