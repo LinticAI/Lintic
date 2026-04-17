@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { describe, test, expect } from 'vitest';
 import request from 'supertest';
 import type {
+  AdminReviewRow,
+  AdminReviewsResponse,
   AssessmentLinkRecord,
   DatabaseAdapter,
   AgentAdapter,
@@ -51,6 +53,16 @@ const BASE_CONSTRAINT: Constraint = {
   context_window: 8000,
   time_limit_minutes: 60,
 };
+
+interface ReviewStateResponseBody {
+  review_state: {
+    status: SessionReviewStatus;
+  };
+}
+
+interface ComparisonRunResponseBody {
+  rows: AdminReviewRow[];
+}
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -2349,11 +2361,12 @@ describe('review queue APIs', () => {
 
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const res = await request(app).get('/api/reviews').set('X-Lintic-Api-Key', 'admin-key');
+    const body = res.body as AdminReviewsResponse;
 
     expect(res.status).toBe(200);
-    expect(res.body.reviews).toHaveLength(2);
-    const first = res.body.reviews.find((row: { session_id: string }) => row.session_id === sessionA);
-    const second = res.body.reviews.find((row: { session_id: string }) => row.session_id === sessionB);
+    expect(body.reviews).toHaveLength(2);
+    const first = body.reviews.find((row) => row.session_id === sessionA);
+    const second = body.reviews.find((row) => row.session_id === sessionB);
     expect(first?.review_status).toBe('reviewed');
     expect(first?.comparison_status).toBe('ready');
     expect(first?.comparison_score).toBe(91);
@@ -2376,14 +2389,16 @@ describe('review queue APIs', () => {
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const liveRes = await request(app).get('/api/reviews').set('X-Lintic-Api-Key', 'admin-key');
     const archivedRes = await request(app).get('/api/reviews?archived=true').set('X-Lintic-Api-Key', 'admin-key');
+    const liveBody = liveRes.body as AdminReviewsResponse;
+    const archivedBody = archivedRes.body as AdminReviewsResponse;
 
     expect(liveRes.status).toBe(200);
-    expect(liveRes.body.reviews).toHaveLength(1);
-    expect(liveRes.body.reviews[0]?.session_id).toBe(activeReview);
+    expect(liveBody.reviews).toHaveLength(1);
+    expect(liveBody.reviews[0]?.session_id).toBe(activeReview);
 
     expect(archivedRes.status).toBe(200);
-    expect(archivedRes.body.reviews).toHaveLength(1);
-    expect(archivedRes.body.reviews[0]?.session_id).toBe(archivedReview);
+    expect(archivedBody.reviews).toHaveLength(1);
+    expect(archivedBody.reviews[0]?.session_id).toBe(archivedReview);
   });
 
   test('POST /api/reviews/:id/viewed does not downgrade reviewed sessions', async () => {
@@ -2393,9 +2408,10 @@ describe('review queue APIs', () => {
 
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const res = await request(app).post(`/api/reviews/${id}/viewed`).set('X-Lintic-Api-Key', 'admin-key');
+    const body = res.body as ReviewStateResponseBody;
 
     expect(res.status).toBe(200);
-    expect(res.body.review_state.status).toBe('reviewed');
+    expect(body.review_state.status).toBe('reviewed');
   });
 
   test('PATCH /api/reviews/:id/status updates the persisted review state', async () => {
@@ -2407,9 +2423,10 @@ describe('review queue APIs', () => {
       .patch(`/api/reviews/${id}/status`)
       .set('X-Lintic-Api-Key', 'admin-key')
       .send({ status: 'reviewed' });
+    const body = res.body as ReviewStateResponseBody;
 
     expect(res.status).toBe(200);
-    expect(res.body.review_state.status).toBe('reviewed');
+    expect(body.review_state.status).toBe('reviewed');
     expect((await db.getSessionReviewState(id))?.status).toBe('reviewed');
   });
 
@@ -2459,43 +2476,44 @@ describe('review queue APIs', () => {
       await db.addBranchMessage(sessionA, 'main', 1, 'user', 'Please start with a plan and test as we go.', 5);
       await db.addBranchMessage(sessionB, 'main', 1, 'user', 'Focus on shipping the API fast.', 5);
 
-      globalThis.fetch = (async (_input: string | URL, init?: RequestInit) => {
-        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      globalThis.fetch = ((_input: string | URL, init?: RequestInit) => {
+        const rawBody = init?.body;
+        const body = typeof rawBody === 'string'
+          ? JSON.parse(rawBody) as Record<string, unknown>
+          : {};
         calls.push({ body });
-        const userMessage = ((body.messages as Array<{ content: string }>)?.[1]?.content ?? '') as string;
+        const messages = Array.isArray(body['messages']) ? body['messages'] as Array<{ content?: string }> : [];
+        const userMessage = messages[1]?.content ?? '';
         expect(userMessage).toContain('Candidate packets (2 total)');
         expect(userMessage.includes('Conversation History (')).toBe(false);
 
-        return {
-          ok: true,
-          text: async () => JSON.stringify({
-            choices: [{
-              message: {
-                content: JSON.stringify({
-                  analyses: [
-                    {
-                      session_id: sessionA,
-                      comparison_score: 88,
-                      recommendation: 'Yes',
-                      strengths: ['Clear direction', 'Good testing'],
-                      risks: ['Some edge cases'],
-                      summary: 'Strong candidate with good structure.',
-                    },
-                    {
-                      session_id: sessionB,
-                      comparison_score: 71,
-                      recommendation: 'Mixed',
-                      strengths: ['Fast iteration'],
-                      risks: ['Less validation'],
-                      summary: 'Moved quickly but left more risk.',
-                    },
-                  ],
-                }),
-              },
-              finish_reason: 'stop',
-            }],
-          }),
-        } as Response;
+        return Promise.resolve(new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                analyses: [
+                  {
+                    session_id: sessionA,
+                    comparison_score: 88,
+                    recommendation: 'Yes',
+                    strengths: ['Clear direction', 'Good testing'],
+                    risks: ['Some edge cases'],
+                    summary: 'Strong candidate with good structure.',
+                  },
+                  {
+                    session_id: sessionB,
+                    comparison_score: 71,
+                    recommendation: 'Mixed',
+                    strengths: ['Fast iteration'],
+                    risks: ['Less validation'],
+                    summary: 'Moved quickly but left more risk.',
+                  },
+                ],
+              }),
+            },
+            finish_reason: 'stop',
+          }],
+        })));
       }) as typeof fetch;
 
       const app = createApp(db, new FakeAdapter(), TEST_CONFIG_WITH_EVALUATION);
@@ -2503,10 +2521,11 @@ describe('review queue APIs', () => {
         .post('/api/reviews/comparison/run')
         .set('X-Lintic-Api-Key', 'admin-key')
         .send({ prompt_id: 'test-prompt' });
+      const body = res.body as ComparisonRunResponseBody;
 
       expect(res.status).toBe(200);
       expect(calls).toHaveLength(1);
-      expect(res.body.rows).toHaveLength(2);
+      expect(body.rows).toHaveLength(2);
       expect((await db.getSessionComparisonAnalysis(sessionA))?.comparison_score).toBe(88);
       expect((await db.getSessionComparisonAnalysis(sessionB))?.recommendation).toBe('Mixed');
       expect(db.sessionEvaluations.size).toBe(0);

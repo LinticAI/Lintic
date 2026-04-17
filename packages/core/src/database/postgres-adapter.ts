@@ -3,7 +3,6 @@ import { Pool, type PoolConfig } from 'pg';
 import type {
   AssessmentLinkRecord,
   ContextAttachment,
-  ContextAttachmentKind,
   ContextResource,
   ContextResourceKind,
   ConversationSummary,

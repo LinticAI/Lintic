@@ -3,7 +3,6 @@ import Database from 'better-sqlite3';
 import type {
   AssessmentLinkRecord,
   ContextAttachment,
-  ContextAttachmentKind,
   ContextResource,
   ContextResourceKind,
   ConversationSummary,

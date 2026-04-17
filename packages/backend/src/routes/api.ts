@@ -931,7 +931,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     const customId = typeof body['id'] === 'string' && body['id'].trim() ? body['id'].trim() : undefined;
     const created = await db.createPrompt({
       ...(customId ? { id: customId } : {}),
-      title: (body['title'] as string).trim(),
+      title: body['title'].trim(),
       ...(typeof body['description'] === 'string' ? { description: body['description'] } : {}),
       ...(typeof body['difficulty'] === 'string' ? { difficulty: body['difficulty'] } : {}),
       tags: Array.isArray(body['tags']) ? (body['tags'] as string[]) : [],
@@ -2861,8 +2861,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     // Truncate history for evaluator context window
     const maxHistory = config.evaluation.max_history_messages ?? 50;
     const historyForEval = truncateHistory(allMessages, maxHistory)
-      .filter((m) => m.content !== null)
-      .map((m) => ({ role: m.role, content: m.content as string }));
+      .flatMap((m) => (m.content === null ? [] : [{ role: m.role, content: m.content }]));
 
     const promptConfig = await db.getPrompt(session.prompt_id);
 
@@ -2912,8 +2911,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     const maxHistory = config.evaluation.max_history_messages ?? 50;
     const allMessages = await db.getBranchMessages(sessionId, branch.id, undefined, { includeRewound: false });
     const historyForContext = truncateHistory(allMessages, maxHistory)
-      .filter((m) => m.content !== null)
-      .map((m) => ({ role: m.role, content: m.content as string }));
+      .flatMap((m) => (m.content === null ? [] : [{ role: m.role, content: m.content }]));
 
     const historyText = historyForContext
       .map((m) => {

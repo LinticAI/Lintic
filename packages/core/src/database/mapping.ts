@@ -5,6 +5,7 @@ import type {
   ContextResource,
   ContextResourceKind,
   ConversationSummary,
+  EvaluationResult,
   SessionComparisonAnalysis,
   SessionEvaluation,
   SessionReviewState,
@@ -172,7 +173,7 @@ export function rowToSessionEvaluation(row: SessionEvaluationRow): SessionEvalua
   return {
     session_id: row.session_id,
     score: Number(row.score),
-    result: JSON.parse(row.result_json),
+    result: JSON.parse(row.result_json) as EvaluationResult,
     created_at: Number(row.created_at),
     updated_at: Number(row.updated_at),
   };
