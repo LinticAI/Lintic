@@ -71,13 +71,13 @@ function relativeTime(ts: number): string {
 }
 
 function reviewStatusLabel(status: SessionReviewStatus): string {
-  if (status === 'reviewed') return 'Reviewed';
+  if (status === 'passed') return 'Passed';
   if (status === 'viewed') return 'Viewed';
   return 'Unviewed';
 }
 
 function reviewStatusColor(status: SessionReviewStatus): string {
-  if (status === 'reviewed') return 'var(--color-status-success)';
+  if (status === 'passed') return 'var(--color-status-success)';
   if (status === 'viewed') return '#F59E0B';
   return 'var(--color-text-dim)';
 }
@@ -216,8 +216,7 @@ function ReviewRowCard({
 }) {
   return (
     <article
-      className="group flex w-full cursor-pointer flex-col rounded-xl border border-transparent px-4 py-3 transition-all duration-150 hover:border-[var(--color-surface-muted)] hover:bg-[var(--color-surface-subtle)]"
-      style={{ background: 'transparent' }}
+      className="group flex w-full cursor-pointer flex-col rounded-xl px-4 py-3 transition-colors duration-150 hover:bg-[var(--color-bg-app)]/50"
       onDoubleClick={() => onOpenReview(review)}
     >
       <div className="min-w-0 flex-1">
@@ -873,6 +872,25 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
     }
   }
 
+  async function updateReviewStatus(sessionId: string, status: SessionReviewStatus) {
+    if (!adminKey) return;
+    setMutatingSessionId(sessionId);
+    try {
+      const response = await fetchAdminJson<{ review_state: { status: SessionReviewStatus } }>(
+        `/api/reviews/${sessionId}/status`,
+        adminKey,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        },
+      );
+      updateReviewStatusLocally(sessionId, response.review_state.status);
+    } finally {
+      setMutatingSessionId(null);
+    }
+  }
+
   async function openReview(row: AdminReviewRow) {
     if (row.review_status === 'unviewed') {
       await markViewed(row.session_id);
@@ -1056,7 +1074,7 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
     const statusOrder: Record<SessionReviewStatus, number> = {
       unviewed: 0,
       viewed: 1,
-      reviewed: 2,
+      passed: 2,
     };
 
     return Array.from(grouped.values())
@@ -1118,6 +1136,7 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
             isDark={isDark}
             onToggleTheme={onToggleTheme}
             reviewStatus={currentReview?.review_status ?? null}
+            onReviewStatusChange={(status) => updateReviewStatus(reviewId, status)}
           />
         </div>
       </div>
@@ -1177,7 +1196,7 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
           {groups.map((group) => {
             const unviewedRows = group.reviews.filter((review) => review.review_status === 'unviewed');
             const viewedRows = group.reviews.filter((review) => review.review_status === 'viewed');
-            const reviewedRows = group.reviews.filter((review) => review.review_status === 'reviewed');
+            const passedRows = group.reviews.filter((review) => review.review_status === 'passed');
             const stagedIds = stagedByPrompt[group.prompt_id] ?? [];
 	            const stagedRows = stagedIds
 	              .map((sessionId) => group.reviews.find((review) => review.session_id === sessionId) ?? null)
@@ -1225,7 +1244,7 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
                         <span>{group.reviews.length} total</span>
                         <span>{unviewedRows.length} unviewed</span>
                         <span>{viewedRows.length} viewed</span>
-                        <span>{reviewedRows.length} reviewed</span>
+                        <span>{passedRows.length} passed</span>
                         {!showArchived && stagedCount > 0 ? <span>{stagedCount} staged</span> : null}
                       </div>
                     </div>
@@ -1260,6 +1279,7 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
                     <CollapsibleSection
                       title="Viewed"
                       count={viewedRows.length}
+                      defaultOpen={true}
                       headerClassName="rounded-xl border border-[var(--color-border-main)] hover:bg-[var(--color-surface-subtle)] transition-colors"
                       onToggle={(nextOpen) => {
                         if (nextOpen) {
@@ -1285,8 +1305,8 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
                     </CollapsibleSection>
 
                     <CollapsibleSection
-                      title="Reviewed"
-                      count={reviewedRows.length}
+                      title="Passed"
+                      count={passedRows.length}
                       headerClassName="rounded-xl border border-[var(--color-border-main)] hover:bg-[var(--color-surface-subtle)] transition-colors"
                       onToggle={(nextOpen) => {
                         if (nextOpen) {
@@ -1295,7 +1315,7 @@ export function AdminReviews({ initialSessionId, isDark, onToggleTheme }: AdminR
                       }}
                     >
                       <div className="flex flex-col gap-1 px-0 pb-2">
-                        {reviewedRows.map((review) => (
+                        {passedRows.map((review) => (
                           <ReviewRowCard
                             key={review.session_id}
                             review={review}

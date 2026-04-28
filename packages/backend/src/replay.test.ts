@@ -197,7 +197,7 @@ class FakeDb implements DatabaseAdapter {
       status,
       updated_at: now,
       ...(status !== 'unviewed' ? { first_viewed_at: existing?.first_viewed_at ?? now, last_viewed_at: now } : {}),
-      ...(status === 'reviewed' ? { reviewed_at: now } : {}),
+      ...(status === 'passed' ? { passed_at: now } : {}),
     };
     this.sessionReviewStates.set(sessionId, next);
     return Promise.resolve(next);

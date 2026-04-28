@@ -30,7 +30,7 @@ export interface SessionReviewStateRow {
   status: string;
   first_viewed_at: number | null;
   last_viewed_at: number | null;
-  reviewed_at: number | null;
+  passed_at: number | null;
   updated_at: number;
 }
 

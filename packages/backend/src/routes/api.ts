@@ -1315,7 +1315,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     reviews.sort((a, b) => {
       const promptCmp = a.prompt_title.localeCompare(b.prompt_title);
       if (promptCmp !== 0) return promptCmp;
-      const statusOrder: Record<SessionReviewStatus, number> = { unviewed: 0, viewed: 1, reviewed: 2 };
+      const statusOrder: Record<SessionReviewStatus, number> = { unviewed: 0, viewed: 1, passed: 2 };
       const statusCmp = statusOrder[a.review_status] - statusOrder[b.review_status];
       if (statusCmp !== 0) return statusCmp;
       return b.completed_at - a.completed_at;
@@ -1365,7 +1365,7 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     }
 
     const existing = await db.getSessionReviewState(sessionId);
-    const nextState = existing?.status === 'reviewed'
+    const nextState = existing?.status === 'passed'
       ? existing
       : await db.upsertSessionReviewState(sessionId, 'viewed');
     res.json({ review_state: nextState });
@@ -1380,12 +1380,12 @@ export function createApiRouter(db: DatabaseAdapter, adapter: AgentAdapter, conf
     }
 
     const body = req.body as { status?: unknown };
-    if (body.status !== 'viewed' && body.status !== 'reviewed') {
-      res.status(400).json({ error: "status must be 'viewed' or 'reviewed'" });
+    if (body.status !== 'viewed' && body.status !== 'passed') {
+      res.status(400).json({ error: "status must be 'viewed' or 'passed'" });
       return;
     }
 
-    const reviewState = await db.upsertSessionReviewState(sessionId, body.status);
+    const reviewState = await db.upsertSessionReviewState(sessionId, body.status as SessionReviewStatus);
     res.json({ review_state: reviewState });
   }));
 

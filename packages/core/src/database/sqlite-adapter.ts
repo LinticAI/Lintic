@@ -281,20 +281,20 @@ export class SQLiteAdapter implements DatabaseAdapter {
       status === 'unviewed' ? null : existing?.first_viewed_at ?? now;
     const lastViewedAt =
       status === 'unviewed' ? null : now;
-    const reviewedAt =
-      status === 'reviewed' ? now : null;
+    const passedAt =
+      status === 'passed' ? now : null;
 
     this.db.prepare(`
       INSERT INTO session_review_states (
-        session_id, status, first_viewed_at, last_viewed_at, reviewed_at, updated_at
+        session_id, status, first_viewed_at, last_viewed_at, passed_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id) DO UPDATE SET
         status = excluded.status,
         first_viewed_at = excluded.first_viewed_at,
         last_viewed_at = excluded.last_viewed_at,
-        reviewed_at = excluded.reviewed_at,
+        passed_at = excluded.passed_at,
         updated_at = excluded.updated_at
-    `).run(sessionId, status, firstViewedAt, lastViewedAt, reviewedAt, now);
+    `).run(sessionId, status, firstViewedAt, lastViewedAt, passedAt, now);
 
     return Promise.resolve({
       session_id: sessionId,
@@ -302,7 +302,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
       updated_at: now,
       ...(firstViewedAt !== null ? { first_viewed_at: firstViewedAt } : {}),
       ...(lastViewedAt !== null ? { last_viewed_at: lastViewedAt } : {}),
-      ...(reviewedAt !== null ? { reviewed_at: reviewedAt } : {}),
+      ...(passedAt !== null ? { passed_at: passedAt } : {}),
     });
   }
 

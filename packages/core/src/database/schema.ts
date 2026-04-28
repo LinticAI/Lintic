@@ -44,7 +44,7 @@ export const SQLITE_SCHEMA = `
     status TEXT NOT NULL,
     first_viewed_at INTEGER,
     last_viewed_at INTEGER,
-    reviewed_at INTEGER,
+    passed_at INTEGER,
     updated_at INTEGER NOT NULL
   );
 
@@ -224,7 +224,7 @@ export const POSTGRES_SCHEMA_STATEMENTS = [
     status TEXT NOT NULL,
     first_viewed_at BIGINT,
     last_viewed_at BIGINT,
-    reviewed_at BIGINT,
+    passed_at BIGINT,
     updated_at BIGINT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS session_comparison_analyses (

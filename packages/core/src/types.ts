@@ -302,14 +302,14 @@ export interface AdminPromptsResponse {
   prompts: PromptSummary[]; // Full prompt config including acceptance_criteria and rubric
 }
 
-export type SessionReviewStatus = 'unviewed' | 'viewed' | 'reviewed';
+export type SessionReviewStatus = 'unviewed' | 'viewed' | 'passed';
 
 export interface SessionReviewState {
   session_id: string;
   status: SessionReviewStatus;
   first_viewed_at?: number;
   last_viewed_at?: number;
-  reviewed_at?: number;
+  passed_at?: number;
   updated_at: number;
 }
 

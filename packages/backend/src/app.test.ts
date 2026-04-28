@@ -227,7 +227,7 @@ class FakeDb implements DatabaseAdapter {
       status,
       updated_at: now,
       ...(status !== 'unviewed' ? { first_viewed_at: existing?.first_viewed_at ?? now, last_viewed_at: now } : {}),
-      ...(status === 'reviewed' ? { reviewed_at: now } : {}),
+      ...(status === 'passed' ? { passed_at: now } : {}),
     };
     this.sessionReviewStates.set(sessionId, next);
     return Promise.resolve(next);
@@ -2356,7 +2356,7 @@ describe('review queue APIs', () => {
     const { id: sessionB } = await db.createSession({ prompt_id: 'test-prompt', candidate_email: 'b@test.com', constraint: BASE_CONSTRAINT });
     db.sessions.set(sessionA, { ...db.sessions.get(sessionA)!, status: 'completed', closed_at: Date.now() - 10_000 });
     db.sessions.set(sessionB, { ...db.sessions.get(sessionB)!, status: 'completed', closed_at: Date.now() - 5_000 });
-    await db.upsertSessionReviewState(sessionA, 'reviewed');
+    await db.upsertSessionReviewState(sessionA, 'passed');
     await db.upsertSessionComparisonAnalysis({
       session_id: sessionA,
       prompt_id: 'test-prompt',
@@ -2376,7 +2376,7 @@ describe('review queue APIs', () => {
     expect(body.reviews).toHaveLength(2);
     const first = body.reviews.find((row) => row.session_id === sessionA);
     const second = body.reviews.find((row) => row.session_id === sessionB);
-    expect(first?.review_status).toBe('reviewed');
+    expect(first?.review_status).toBe('passed');
     expect(first?.comparison_status).toBe('ready');
     expect(first?.comparison_score).toBe(91);
     expect(second?.review_status).toBe('unviewed');
@@ -2410,17 +2410,17 @@ describe('review queue APIs', () => {
     expect(archivedBody.reviews[0]?.session_id).toBe(archivedReview);
   });
 
-  test('POST /api/reviews/:id/viewed does not downgrade reviewed sessions', async () => {
+  test('POST /api/reviews/:id/viewed does not downgrade passed sessions', async () => {
     const db = new FakeDb();
     const { id } = await db.createSession({ prompt_id: 'test-prompt', candidate_email: 'viewed@test.com', constraint: BASE_CONSTRAINT });
-    await db.upsertSessionReviewState(id, 'reviewed');
+    await db.upsertSessionReviewState(id, 'passed');
 
     const app = createApp(db, new FakeAdapter(), TEST_CONFIG);
     const res = await request(app).post(`/api/reviews/${id}/viewed`).set('X-Lintic-Api-Key', 'admin-key');
     const body = res.body as ReviewStateResponseBody;
 
     expect(res.status).toBe(200);
-    expect(body.review_state.status).toBe('reviewed');
+    expect(body.review_state.status).toBe('passed');
   });
 
   test('PATCH /api/reviews/:id/status updates the persisted review state', async () => {
@@ -2431,12 +2431,12 @@ describe('review queue APIs', () => {
     const res = await request(app)
       .patch(`/api/reviews/${id}/status`)
       .set('X-Lintic-Api-Key', 'admin-key')
-      .send({ status: 'reviewed' });
+      .send({ status: 'passed' });
     const body = res.body as ReviewStateResponseBody;
 
     expect(res.status).toBe(200);
-    expect(body.review_state.status).toBe('reviewed');
-    expect((await db.getSessionReviewState(id))?.status).toBe('reviewed');
+    expect(body.review_state.status).toBe('passed');
+    expect((await db.getSessionReviewState(id))?.status).toBe('passed');
   });
 
   test('POST /api/reviews/:id/archive archives a completed review', async () => {

@@ -76,7 +76,7 @@ export function normalizeSessionReviewStateRow(row: SessionReviewStateRow): Sess
     ...row,
     first_viewed_at: row.first_viewed_at === null ? null : Number(row.first_viewed_at),
     last_viewed_at: row.last_viewed_at === null ? null : Number(row.last_viewed_at),
-    reviewed_at: row.reviewed_at === null ? null : Number(row.reviewed_at),
+    passed_at: row.passed_at === null ? null : Number(row.passed_at),
     updated_at: Number(row.updated_at),
   };
 }
@@ -187,7 +187,7 @@ export function rowToSessionReviewState(row: SessionReviewStateRow): SessionRevi
   };
   if (row.first_viewed_at !== null) state.first_viewed_at = Number(row.first_viewed_at);
   if (row.last_viewed_at !== null) state.last_viewed_at = Number(row.last_viewed_at);
-  if (row.reviewed_at !== null) state.reviewed_at = Number(row.reviewed_at);
+  if (row.passed_at !== null) state.passed_at = Number(row.passed_at);
   return state;
 }
 

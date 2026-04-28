@@ -261,19 +261,19 @@ export class PostgresAdapter implements DatabaseAdapter {
     const current = existing.rows[0] ? normalizeSessionReviewStateRow(existing.rows[0]) : null;
     const firstViewedAt = status === 'unviewed' ? null : current?.first_viewed_at ?? now;
     const lastViewedAt = status === 'unviewed' ? null : now;
-    const reviewedAt = status === 'reviewed' ? now : null;
+    const passedAt = status === 'passed' ? now : null;
 
     await this.pool.query(
       `INSERT INTO session_review_states (
-        session_id, status, first_viewed_at, last_viewed_at, reviewed_at, updated_at
+        session_id, status, first_viewed_at, last_viewed_at, passed_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (session_id) DO UPDATE SET
         status = EXCLUDED.status,
         first_viewed_at = EXCLUDED.first_viewed_at,
         last_viewed_at = EXCLUDED.last_viewed_at,
-        reviewed_at = EXCLUDED.reviewed_at,
+        passed_at = EXCLUDED.passed_at,
         updated_at = EXCLUDED.updated_at`,
-      [sessionId, status, firstViewedAt, lastViewedAt, reviewedAt, now],
+      [sessionId, status, firstViewedAt, lastViewedAt, passedAt, now],
     );
 
     return {
@@ -282,7 +282,7 @@ export class PostgresAdapter implements DatabaseAdapter {
       updated_at: now,
       ...(firstViewedAt !== null ? { first_viewed_at: firstViewedAt } : {}),
       ...(lastViewedAt !== null ? { last_viewed_at: lastViewedAt } : {}),
-      ...(reviewedAt !== null ? { reviewed_at: reviewedAt } : {}),
+      ...(passedAt !== null ? { passed_at: passedAt } : {}),
     };
   }
 

@@ -139,20 +139,20 @@ describe('session evaluation persistence', () => {
 });
 
 describe('session review state persistence', () => {
-  test('stores and reloads viewed and reviewed states', async () => {
+  test('stores and reloads viewed and passed states', async () => {
     const db = makeAdapter();
     const { id } = await db.createSession(BASE_CONFIG);
 
     const viewed = await db.upsertSessionReviewState(id, 'viewed');
-    const reviewed = await db.upsertSessionReviewState(id, 'reviewed');
+    const passed = await db.upsertSessionReviewState(id, 'passed');
     const reloaded = await db.getSessionReviewState(id);
 
     expect(viewed.status).toBe('viewed');
     expect(viewed.first_viewed_at).toBeDefined();
     expect(viewed.last_viewed_at).toBeDefined();
-    expect(reviewed.status).toBe('reviewed');
-    expect(reviewed.reviewed_at).toBeDefined();
-    expect(reloaded?.status).toBe('reviewed');
+    expect(passed.status).toBe('passed');
+    expect(passed.passed_at).toBeDefined();
+    expect(reloaded?.status).toBe('passed');
   });
 });
 
@@ -307,7 +307,7 @@ describe('archiveSession / deleteSession / purgeArchivedSessions', () => {
     const db = makeAdapter();
     const { id } = await db.createSession(BASE_CONFIG);
     await db.closeSession(id);
-    await db.upsertSessionReviewState(id, 'reviewed');
+    await db.upsertSessionReviewState(id, 'passed');
     await db.upsertSessionComparisonAnalysis({
       session_id: id,
       prompt_id: BASE_CONFIG.prompt_id,

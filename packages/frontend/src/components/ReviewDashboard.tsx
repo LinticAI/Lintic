@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Download, Moon, Sun, MessageSquare, Code, Activity, User, Terminal, ChevronDown, ChevronUp, Info, Zap, Cpu, LifeBuoy, FlaskConical, Database, Shield, BarChart2, GitBranch, Navigation, Layers, Clock, Loader, RotateCcw } from 'lucide-react';
+import { ChevronRight, Download, Moon, Sun, MessageSquare, Code, Activity, User, Terminal, ChevronDown, ChevronUp, Info, Zap, Cpu, LifeBuoy, FlaskConical, Database, Shield, BarChart2, GitBranch, Navigation, Layers, Clock, Loader, RotateCcw, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   buildCodeStateSnapshot,
@@ -25,7 +25,7 @@ interface ReviewDashboardProps {
   isDark: boolean;
   onToggleTheme: () => void;
   reviewStatus?: SessionReviewStatus | null;
-  onReviewStatusChange?: (status: Extract<SessionReviewStatus, 'viewed' | 'reviewed'>) => Promise<void> | void;
+  onReviewStatusChange?: (status: Extract<SessionReviewStatus, 'viewed' | 'passed'>) => Promise<void> | void;
 }
 
 // ─── Evaluation types ───────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ function formatTimestamp(timestamp: number): string {
 }
 
 function formatReviewStatus(status: SessionReviewStatus): string {
-  if (status === 'reviewed') return 'Reviewed';
+  if (status === 'passed') return 'Passed';
   if (status === 'viewed') return 'Viewed';
   return 'Unviewed';
 }
@@ -1006,7 +1006,7 @@ export function ReviewDashboard({
   }, [codeState, data]);
   const activeCode = effectiveCodeState.activePath ? effectiveCodeState.files[effectiveCodeState.activePath] ?? '' : '';
 
-  const handleReviewStatusChange = async (status: 'viewed' | 'reviewed') => {
+  const handleReviewStatusChange = async (status: 'viewed' | 'passed') => {
     if (!onReviewStatusChange || updatingReviewStatus) return;
     setUpdatingReviewStatus(true);
     try {
@@ -1140,12 +1140,34 @@ export function ReviewDashboard({
               type="button"
               disabled={updatingReviewStatus}
               onClick={() => {
-                void handleReviewStatusChange(reviewStatus === 'reviewed' ? 'viewed' : 'reviewed');
+                void handleReviewStatusChange(reviewStatus === 'passed' ? 'viewed' : 'passed');
               }}
-              className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold transition-colors hover:bg-[var(--color-surface-subtle)] disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ color: 'var(--color-text-muted)' }}
+              className="flex items-center gap-2 rounded-xl px-4 py-2 text-[12px] font-bold transition-all shadow-sm hover:shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                background: reviewStatus === 'passed' 
+                  ? 'var(--color-bg-app)' 
+                  : 'var(--color-status-success)',
+                color: reviewStatus === 'passed' 
+                  ? 'var(--color-text-muted)' 
+                  : 'white',
+                border: reviewStatus === 'passed'
+                  ? '1px solid var(--color-border-main)'
+                  : 'none'
+              }}
             >
-              {reviewStatus === 'reviewed' ? 'Mark Viewed' : 'Mark Reviewed'}
+              {updatingReviewStatus ? (
+                <Loader size={14} className="animate-spin" />
+              ) : reviewStatus === 'passed' ? (
+                <>
+                  <RotateCcw size={14} />
+                  Mark Viewed
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={14} />
+                  Mark Passed
+                </>
+              )}
             </button>
           ) : null}
           <button

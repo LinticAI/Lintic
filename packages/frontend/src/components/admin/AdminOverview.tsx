@@ -85,8 +85,8 @@ function LegendItem({ color, label, value, total }: { color: string; label: stri
   );
 }
 
-function DonutChart({ unviewed, viewed, reviewed }: { unviewed: number, viewed: number, reviewed: number }) {
-  const total = unviewed + viewed + reviewed;
+function DonutChart({ unviewed, viewed, passed }: { unviewed: number, viewed: number, passed: number }) {
+  const total = unviewed + viewed + passed;
   if (total === 0) return (
     <svg viewBox="0 0 36 36" className="w-full h-full drop-shadow-sm">
       <circle r="15.915" cx="18" cy="18" fill="transparent" stroke="var(--color-bg-app)" strokeWidth="3" />
@@ -96,7 +96,7 @@ function DonutChart({ unviewed, viewed, reviewed }: { unviewed: number, viewed: 
   const radius = 15.915;
   const unviewedPct = (unviewed / total) * 100;
   const viewedPct = (viewed / total) * 100;
-  const reviewedPct = (reviewed / total) * 100;
+  const passedPct = (passed / total) * 100;
 
   return (
     <svg viewBox="0 0 36 36" className="w-full h-full drop-shadow-sm transform -rotate-90 overflow-visible">
@@ -107,8 +107,8 @@ function DonutChart({ unviewed, viewed, reviewed }: { unviewed: number, viewed: 
       {viewedPct > 0 && (
         <circle r={radius} cx="18" cy="18" fill="transparent" stroke="var(--color-brand)" strokeWidth="3" strokeDasharray={`${viewedPct} ${100 - viewedPct}`} strokeDashoffset={-unviewedPct} strokeLinecap="round" />
       )}
-      {reviewedPct > 0 && (
-        <circle r={radius} cx="18" cy="18" fill="transparent" stroke="var(--color-status-success)" strokeWidth="3" strokeDasharray={`${reviewedPct} ${100 - reviewedPct}`} strokeDashoffset={-(unviewedPct + viewedPct)} strokeLinecap="round" />
+      {passedPct > 0 && (
+        <circle r={radius} cx="18" cy="18" fill="transparent" stroke="var(--color-status-success)" strokeWidth="3" strokeDasharray={`${passedPct} ${100 - passedPct}`} strokeDashoffset={-(unviewedPct + viewedPct)} strokeLinecap="round" />
       )}
     </svg>
   );
@@ -153,9 +153,9 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
 
   const unviewedReviews = reviews.filter((r) => r.review_status === 'unviewed' && !r.archived_at).length;
   const inProgressReviews = reviews.filter((r) => r.review_status === 'viewed' && !r.archived_at).length;
-  const completedReviews = reviews.filter((r) => r.review_status === 'reviewed' && !r.archived_at).length;
+  const completedReviews = reviews.filter((r) => r.review_status === 'passed' && !r.archived_at).length;
 
-  const pendingReviews = reviews.filter((r) => r.review_status !== 'reviewed' && !r.archived_at).sort((a, b) => b.completed_at - a.completed_at);
+  const pendingReviews = reviews.filter((r) => r.review_status !== 'passed' && !r.archived_at).sort((a, b) => b.completed_at - a.completed_at);
   const recentLinks = [...links].sort((a, b) => b.created_at - a.created_at).slice(0, 5);
 
   const promptCounts = links.reduce((acc, link) => {
@@ -289,7 +289,7 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
              ) : (
                 <div className="flex flex-col items-center py-4">
                   <div className="relative w-44 h-44 mb-2">
-                    <DonutChart unviewed={unviewedReviews} viewed={inProgressReviews} reviewed={completedReviews} />
+                    <DonutChart unviewed={unviewedReviews} viewed={inProgressReviews} passed={completedReviews} />
                     <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                       <span className="text-3xl font-bold tracking-tight" style={{ color: 'var(--color-text-main)' }}>{reviews.filter(r => !r.archived_at).length}</span>
                       <span className="text-[10px] font-bold mt-1" style={{ color: 'var(--color-text-dim)' }}>Total candidates</span>
@@ -297,9 +297,9 @@ export function AdminOverview({ onNavigate }: AdminOverviewProps) {
                   </div>
                   
                   <div className="mt-6 w-full flex flex-col gap-3 px-2">
-                    <LegendItem color="var(--color-status-success)" label="Reviewed" value={completedReviews} total={reviews.filter(r => !r.archived_at).length} />
+                    <LegendItem color="var(--color-status-success)" label="Passed" value={completedReviews} total={reviews.filter(r => !r.archived_at).length} />
+                    <LegendItem color="var(--color-brand)" label="Viewed" value={inProgressReviews} total={reviews.filter(r => !r.archived_at).length} />
                     <LegendItem color="var(--color-status-warning)" label="Unviewed" value={unviewedReviews} total={reviews.filter(r => !r.archived_at).length} />
-                    <LegendItem color="var(--color-brand)" label="In Progress" value={inProgressReviews} total={reviews.filter(r => !r.archived_at).length} />
                   </div>
                 </div>
              )}
