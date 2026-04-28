@@ -1,5 +1,6 @@
 import { Duplex } from 'node:stream';
 import { IncomingMessage, ServerResponse } from 'node:http';
+import type { Socket } from 'node:net';
 import type { Express } from 'express';
 
 interface InjectResponse {
@@ -23,7 +24,7 @@ class MockSocket extends Duplex {
     callback();
   }
 
-  override setTimeout(): this {
+  setTimeout(): this {
     return this;
   }
 
@@ -40,13 +41,11 @@ async function inject(app: Express, input: {
   body?: string | Buffer;
   jsonBody?: unknown;
 }): Promise<InjectResponse> {
-  const socket = new MockSocket();
+  const socket = new MockSocket() as unknown as Socket;
   const req = new IncomingMessage(socket);
   req.method = input.method;
   req.url = input.path;
   req.headers = input.headers;
-  req.socket = socket;
-  req.connection = socket;
   if (input.jsonBody !== undefined) {
     (req as IncomingMessage & { body?: unknown }).body = input.jsonBody;
   }
@@ -76,7 +75,9 @@ async function inject(app: Express, input: {
     res.on('finish', resolve);
     res.on('error', reject);
 
-    app.handle(req as never, res as never, (err?: unknown) => {
+    (app as unknown as {
+      handle: (request: IncomingMessage, response: ServerResponse, next: (err?: unknown) => void) => void;
+    }).handle(req, res, (err?: unknown) => {
       if (err) {
         reject(err);
         return;
@@ -182,13 +183,26 @@ class TestRequest {
       headers['content-length'] = String(Buffer.byteLength(this.body));
     }
 
-    return inject(this.app, {
+    const input: {
+      method: string;
+      path: string;
+      headers: Record<string, string>;
+      body?: string | Buffer;
+      jsonBody?: unknown;
+    } = {
       method: this.method,
       path: finalPath,
       headers,
-      body: this.body,
-      jsonBody: this.jsonBody,
-    });
+    };
+
+    if (this.body !== undefined) {
+      input.body = this.body;
+    }
+    if (this.jsonBody !== undefined) {
+      input.jsonBody = this.jsonBody;
+    }
+
+    return inject(this.app, input);
   }
 }
 
